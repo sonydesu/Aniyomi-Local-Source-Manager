@@ -1,0 +1,6 @@
+{
+  "name": "Anime Local Builder",
+  "description": "An Aniyomi-style web app to search for anime, view details, and download local details.json and episodes.json metadata files.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
