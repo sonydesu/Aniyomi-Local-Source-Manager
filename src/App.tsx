@@ -71,19 +71,36 @@ export default function App() {
     setIsDownloading(true);
     
     try {
-      // Map it to an Aniyomi-esque format
+      const allGenresSet = new Set<string>();
+      selectedAnime.genres?.forEach(g => allGenresSet.add(g.name));
+      selectedAnime.explicit_genres?.forEach(g => allGenresSet.add(g.name));
+      selectedAnime.themes?.forEach(g => allGenresSet.add(g.name));
+      selectedAnime.demographics?.forEach(g => allGenresSet.add(g.name));
+
+      // Map it to an Aniyomi-esque format, highly detailed
       const detailsFormat = {
         title: selectedAnime.title,
         title_english: selectedAnime.title_english,
-        author: selectedAnime.studios.map(s => s.name).join(', '),
-        artist: selectedAnime.studios.map(s => s.name).join(', '),
+        title_japanese: selectedAnime.title_japanese,
+        synonyms: selectedAnime.title_synonyms || [],
+        author: selectedAnime.studios?.map(s => s.name).join(', ') || 'Unknown',
+        artist: selectedAnime.studios?.map(s => s.name).join(', ') || 'Unknown',
+        producers: selectedAnime.producers?.map(s => s.name) || [],
+        licensors: selectedAnime.licensors?.map(s => s.name) || [],
         description: selectedAnime.synopsis,
-        genre: selectedAnime.genres.map(g => g.name),
+        background: selectedAnime.background,
+        genre: Array.from(allGenresSet),
         status: selectedAnime.status,
         score: selectedAnime.score,
+        scored_by: selectedAnime.scored_by,
+        rank: selectedAnime.rank,
+        popularity: selectedAnime.popularity,
         year: selectedAnime.year,
         episodes_count: selectedAnime.episodes,
-        cover_image: selectedAnime.images.webp.large_image_url
+        duration: selectedAnime.duration,
+        rating: selectedAnime.rating,
+        aired_string: selectedAnime.aired?.string,
+        cover_image: selectedAnime.images?.webp?.large_image_url
       };
 
       const json = JSON.stringify(detailsFormat, null, 2);
@@ -98,13 +115,17 @@ export default function App() {
     setIsDownloading(true);
 
     try {
-      // Create episode data
+      // Create episode data with sub/dub metadata
       const episodesFormat = episodes.map(ep => ({
         name: ep.title,
         episode_number: ep.mal_id,
         date_upload: ep.aired ? new Date(ep.aired).getTime() : null,
         filler: ep.filler,
-        recap: ep.recap
+        recap: ep.recap,
+        sub: true, // Assuming mostly all available local anime has subs
+        dub: !!selectedAnime.title_english, // Simple heuristic for dub existence
+        audio: !!selectedAnime.title_english ? ['ja', 'en'] : ['ja'],
+        subtitles: ['en']
       }));
 
       const json = JSON.stringify(episodesFormat, null, 2);
@@ -289,8 +310,8 @@ export default function App() {
                       )}
                       
                       <div className="flex flex-wrap gap-2 mb-6 mt-4">
-                        {selectedAnime.genres.map(g => (
-                          <span key={g.mal_id} className="px-2 py-1 bg-slate-800 border border-slate-700 rounded text-xs font-semibold text-slate-300 uppercase tracking-wider">
+                        {[...(selectedAnime.genres || []), ...(selectedAnime.explicit_genres || []), ...(selectedAnime.themes || []), ...(selectedAnime.demographics || [])].slice(0, 15).map((g, i) => (
+                          <span key={`${g.mal_id}-${i}`} className="px-2 py-1 bg-slate-800 border border-slate-700 rounded text-xs font-semibold text-slate-300 uppercase tracking-wider">
                             {g.name}
                           </span>
                         ))}

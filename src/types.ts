@@ -2,6 +2,8 @@ export interface Anime {
   mal_id: number;
   title: string;
   title_english: string | null;
+  title_japanese: string | null;
+  title_synonyms: string[];
   images: {
     webp: {
       image_url: string;
@@ -9,17 +11,29 @@ export interface Anime {
     };
   };
   synopsis: string;
+  background: string | null;
   episodes: number | null;
+  duration: string | null;
+  rating: string | null;
   score: number | null;
+  scored_by: number | null;
+  rank: number | null;
+  popularity: number | null;
   genres: Array<{ mal_id: number; name: string }>;
+  explicit_genres: Array<{ mal_id: number; name: string }>;
+  themes: Array<{ mal_id: number; name: string }>;
+  demographics: Array<{ mal_id: number; name: string }>;
   status: string;
   aired: {
     string: string;
     from: string | null;
+    to: string | null;
   };
   type: string;
   year: number | null;
   studios: Array<{ name: string }>;
+  producers: Array<{ name: string }>;
+  licensors: Array<{ name: string }>;
 }
 
 export interface Episode {
