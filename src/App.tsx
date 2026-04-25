@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ArrowLeft, Search, Download, Star, Tv, Calendar, Info, PlayCircle, Loader2 } from 'lucide-react';
+import { GoogleGenAI, Type } from '@google/genai';
 import { searchAnime, getAnimeDetails, getAnimeEpisodes } from './api';
 import { Anime, Episode } from './types';
 
@@ -24,7 +25,6 @@ export default function App() {
   const [selectedAnime, setSelectedAnime] = useState<Anime | null>(null);
   const [episodes, setEpisodes] = useState<Episode[]>([]);
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
-  const [isDownloading, setIsDownloading] = useState(false);
 
   // Debounced Search
   useEffect(() => {
@@ -76,16 +76,20 @@ export default function App() {
     setEpisodes([]);
   };
 
+  const [downloadingDetails, setDownloadingDetails] = useState(false);
+  const [downloadingEpisodes, setDownloadingEpisodes] = useState(false);
+
   const downloadDetailsJson = async () => {
     if (!selectedAnime) return;
-    setIsDownloading(true);
+    setDownloadingDetails(true);
     
     try {
-      const allGenresSet = new Set<string>();
-      selectedAnime.genres?.forEach(g => allGenresSet.add(g.name));
-      selectedAnime.explicit_genres?.forEach(g => allGenresSet.add(g.name));
-      selectedAnime.themes?.forEach(g => allGenresSet.add(g.name));
-      selectedAnime.demographics?.forEach(g => allGenresSet.add(g.name));
+      let finalGenres = Array.from(new Set([
+        ...(selectedAnime.genres?.map(g => g.name) || []),
+        ...(selectedAnime.explicit_genres?.map(g => g.name) || []),
+        ...(selectedAnime.themes?.map(g => g.name) || []),
+        ...(selectedAnime.demographics?.map(g => g.name) || [])
+      ]));
 
       let statusNum = 0; // Unknown
       if (selectedAnime.status?.includes('Finished') || selectedAnime.status?.includes('Complete')) {
@@ -107,18 +111,74 @@ export default function App() {
 
       let combinedDescription = selectedAnime.synopsis || '';
       
+      let metaFooter = '';
       if (selectedAnime.background) {
-        combinedDescription += `\n\nBackground: ${selectedAnime.background}`;
+        metaFooter += `\n\nBackground: ${selectedAnime.background}`;
+      } else {
+        metaFooter += `\n\n`;
       }
 
-      combinedDescription += `\n\nCountry: Japan`;
-      combinedDescription += `\nPremiered: ${seasonStr}`;
-      combinedDescription += `\nDate aired: ${selectedAnime.aired?.string || 'N/A'}`;
-      combinedDescription += `\nDuration: ${selectedAnime.duration || 'N/A'}`;
-      combinedDescription += `\nRating: ${selectedAnime.rating || 'N/A'}`;
-      combinedDescription += `\nMAL rating: ${selectedAnime.score || 'N/A'}`;
+      metaFooter += `Country: Japan`;
+      metaFooter += `\nPremiered: ${seasonStr}`;
+      metaFooter += `\nDate aired: ${selectedAnime.aired?.string || 'N/A'}`;
+      metaFooter += `\nDuration: ${selectedAnime.duration || 'N/A'}`;
+      metaFooter += `\nRating: ${selectedAnime.rating || 'N/A'}`;
+      metaFooter += `\nMAL rating: ${selectedAnime.score || 'N/A'}`;
       if (altTitles) {
-        combinedDescription += `\nAlternative Titles: ${altTitles}`;
+        metaFooter += `\nAlternative Titles: ${altTitles}`;
+      }
+
+      combinedDescription += metaFooter;
+      let finalDescription = combinedDescription.trim();
+
+      // Call AI to enhance description and genres
+      try {
+        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+        const promptText = `You are an expert otaku AI focusing on anime. 
+Here is basic info for the anime '${selectedAnime.title}':
+${selectedAnime.synopsis || "No description available."}
+Current Genres/Tags: ${finalGenres.join(", ")}
+
+Please expand the description into a highly detailed and engaging anime synopsis (around 2-3 paragraphs) based on your deep otaku knowledge.
+Also, provide a list of 15 to 25 relevant anime genres, themes, tropes, and tags for this anime (e.g., Action, Shounen, Dark Fantasy, Mecha, Tsundere, Magic, etc.).
+
+Return ONLY a JSON object with these two fields:
+{
+  "description": "The detailed synopsis string...",
+  "genres": ["Action", "Sci-Fi", "Mecha", "etc..."]
+}`;
+
+        const response = await ai.models.generateContent({
+          model: "gemini-3.1-pro-preview",
+          contents: promptText,
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                description: { type: Type.STRING },
+                genres: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING }
+                }
+              },
+              required: ["description", "genres"]
+            }
+          }
+        });
+
+        const textRes = response.text;
+        if (textRes) {
+          const aiData = JSON.parse(textRes);
+          if (aiData.description) {
+            finalDescription = aiData.description.trim() + "\n" + metaFooter;
+          }
+          if (aiData.genres && Array.isArray(aiData.genres)) {
+            finalGenres = [...new Set([...finalGenres, ...aiData.genres])];
+          }
+        }
+      } catch (aiError) {
+        console.error("AI enhancement failed, falling back to original data:", aiError);
       }
 
       // Map it to an Aniyomi-esque format as requested
@@ -126,21 +186,23 @@ export default function App() {
         title: selectedAnime.title,
         author: selectedAnime.studios?.map(s => s.name).join(', ') || 'Unknown',
         artist: selectedAnime.studios?.map(s => s.name).join(', ') || 'Unknown',
-        description: combinedDescription.trim(),
-        genre: Array.from(allGenresSet),
+        description: finalDescription,
+        genre: finalGenres,
         status: statusNum
       };
 
       const json = JSON.stringify(detailsFormat, null, 2);
       downloadFile(json, 'details.json');
+    } catch (error) {
+      console.error("Error generating details:", error);
     } finally {
-      setIsDownloading(false);
+      setDownloadingDetails(false);
     }
   };
 
   const downloadEpisodesJson = async () => {
     if (!selectedAnime) return;
-    setIsDownloading(true);
+    setDownloadingEpisodes(true);
 
     try {
       const isDubbed = !!selectedAnime.title_english;
@@ -172,7 +234,7 @@ export default function App() {
       const json = JSON.stringify(episodesFormat, null, 2);
       downloadFile(json, 'episodes.json');
     } finally {
-      setIsDownloading(false);
+      setDownloadingEpisodes(false);
     }
   };
 
@@ -333,20 +395,21 @@ export default function App() {
                       <div className="flex flex-col gap-2">
                         <button 
                           onClick={downloadDetailsJson}
-                          disabled={isDownloading}
+                          disabled={downloadingDetails}
                           className="w-full flex items-center gap-3 bg-slate-900 hover:bg-slate-800 border border-slate-700 p-3 rounded-lg transition-all disabled:opacity-50 text-left"
                         >
-                          <Download className="w-4 h-4 text-indigo-400 shrink-0" />
+                          {downloadingDetails ? <Loader2 className="w-4 h-4 text-indigo-400 shrink-0 animate-spin" /> : <Download className="w-4 h-4 text-indigo-400 shrink-0" />}
                           <div className="flex flex-col">
                             <span className="text-xs font-mono text-slate-300">details.json</span>
+                            {downloadingDetails && <span className="text-[10px] text-indigo-400 font-medium">✨ Enhancing with AI...</span>}
                           </div>
                         </button>
                         <button 
                           onClick={downloadEpisodesJson}
-                          disabled={isDownloading || episodes.length === 0}
+                          disabled={downloadingEpisodes || episodes.length === 0}
                           className="w-full flex items-center gap-3 bg-slate-900 hover:bg-slate-800 border border-slate-700 p-3 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed text-left"
                         >
-                          <Download className="w-4 h-4 text-indigo-400 shrink-0" />
+                          {downloadingEpisodes ? <Loader2 className="w-4 h-4 text-indigo-400 shrink-0 animate-spin" /> : <Download className="w-4 h-4 text-indigo-400 shrink-0" />}
                           <div className="flex flex-col">
                             <span className="text-xs font-mono text-slate-300">episodes.json</span>
                           </div>
