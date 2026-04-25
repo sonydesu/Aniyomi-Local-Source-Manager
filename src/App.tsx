@@ -390,7 +390,7 @@ Return ONLY a JSON object with these two fields:
                     <div className="bg-indigo-900/20 border border-indigo-500/30 p-5 rounded-xl flex flex-col gap-4">
                       <div className="flex items-center justify-between">
                         <h3 className="text-sm font-semibold text-indigo-100">Local Export Toolkit</h3>
-                        <span className="text-[10px] px-2 py-0.5 bg-indigo-500 text-white rounded-full font-bold">1.0</span>
+                        <span className="text-[10px] px-2 py-0.5 bg-indigo-500 text-white rounded-full font-bold">2.0</span>
                       </div>
                       <div className="flex flex-col gap-2">
                         <button 
