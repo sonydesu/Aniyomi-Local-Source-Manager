@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ArrowLeft, Search, Download, Star, Tv, Calendar, Info, PlayCircle, Loader2 } from 'lucide-react';
+import { ArrowLeft, Search, Download, Star, Tv, Calendar, Info, PlayCircle, Loader2, Settings, X, Wand2 } from 'lucide-react';
 import { GoogleGenAI, Type } from '@google/genai';
 import { searchAnime, getAnimeDetails, getAnimeEpisodes } from './api';
 import { Anime, Episode } from './types';
@@ -13,6 +13,13 @@ export default function App() {
 
   // App Settings State
   const [titleLanguage, setTitleLanguage] = useState<'english' | 'romaji'>('english');
+  const [showSettings, setShowSettings] = useState(false);
+  const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
+
+  const saveSettings = () => {
+    localStorage.setItem('gemini_api_key', geminiKey);
+    setShowSettings(false);
+  };
 
   const getDisplayTitle = (anime: Anime) => {
     if (titleLanguage === 'english' && anime.title_english) {
@@ -60,7 +67,6 @@ export default function App() {
       const anime = await getAnimeDetails(id);
       setSelectedAnime(anime);
       
-      // Also fetch episodes concurrently if possible, but safely sequentially to avoid rate limits
       const epList = await getAnimeEpisodes(id);
       setEpisodes(epList);
     } catch (err: any) {
@@ -79,7 +85,7 @@ export default function App() {
   const [downloadingDetails, setDownloadingDetails] = useState(false);
   const [downloadingEpisodes, setDownloadingEpisodes] = useState(false);
 
-  const downloadDetailsJson = async () => {
+  const downloadDetailsJson = async (enhanceWithAI: boolean = false) => {
     if (!selectedAnime) return;
     setDownloadingDetails(true);
     
@@ -132,9 +138,15 @@ export default function App() {
       let finalDescription = combinedDescription.trim();
 
       // Call AI to enhance description and genres
-      try {
-        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-        const promptText = `You are an expert otaku AI focusing on anime. 
+      if (enhanceWithAI) {
+        try {
+          const apiKeyToUse = geminiKey || process.env.GEMINI_API_KEY;
+          if (!apiKeyToUse) {
+            throw new Error("Missing Gemini API Key. Please click the Settings gear icon to add your own key, or use Original details.");
+          }
+
+          const ai = new GoogleGenAI({ apiKey: apiKeyToUse });
+          const promptText = `You are an expert otaku AI focusing on anime. 
 Here is basic info for the anime '${selectedAnime.title}':
 ${selectedAnime.synopsis || "No description available."}
 Current Genres/Tags: ${finalGenres.join(", ")}
@@ -148,37 +160,39 @@ Return ONLY a JSON object with these two fields:
   "genres": ["Action", "Sci-Fi", "Mecha", "etc..."]
 }`;
 
-        const response = await ai.models.generateContent({
-          model: "gemini-3.1-pro-preview",
-          contents: promptText,
-          config: {
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                description: { type: Type.STRING },
-                genres: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING }
-                }
-              },
-              required: ["description", "genres"]
+          const response = await ai.models.generateContent({
+            model: "gemini-3.1-pro-preview",
+            contents: promptText,
+            config: {
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  description: { type: Type.STRING },
+                  genres: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING }
+                  }
+                },
+                required: ["description", "genres"]
+              }
+            }
+          });
+
+          const textRes = response.text;
+          if (textRes) {
+            const aiData = JSON.parse(textRes);
+            if (aiData.description) {
+              finalDescription = aiData.description.trim() + "\n" + metaFooter;
+            }
+            if (aiData.genres && Array.isArray(aiData.genres)) {
+              finalGenres = [...new Set([...finalGenres, ...aiData.genres])];
             }
           }
-        });
-
-        const textRes = response.text;
-        if (textRes) {
-          const aiData = JSON.parse(textRes);
-          if (aiData.description) {
-            finalDescription = aiData.description.trim() + "\n" + metaFooter;
-          }
-          if (aiData.genres && Array.isArray(aiData.genres)) {
-            finalGenres = [...new Set([...finalGenres, ...aiData.genres])];
-          }
+        } catch (aiError: any) {
+          console.error("AI enhancement failed:", aiError);
+          alert(`AI enhancement failed: ${aiError.message || "Unknown error."}\nFalling back to original data.`);
         }
-      } catch (aiError) {
-        console.error("AI enhancement failed, falling back to original data:", aiError);
       }
 
       // Map it to an Aniyomi-esque format as requested
@@ -274,6 +288,13 @@ Return ONLY a JSON object with these two fields:
           </div>
           
           <div className="flex items-center gap-4 flex-1 justify-end">
+            <button 
+              onClick={() => setShowSettings(true)}
+              className="p-1.5 text-slate-400 hover:text-white bg-slate-800 rounded-md border border-slate-700 transition-colors"
+              aria-label="Settings"
+            >
+              <Settings className="w-4 h-4" />
+            </button>
             <div className="hidden sm:flex items-center gap-1 bg-slate-900 border border-slate-800 p-1 rounded-md shadow-inner overflow-hidden">
               <button
                 onClick={() => setTitleLanguage('english')}
@@ -367,7 +388,7 @@ Return ONLY a JSON object with these two fields:
             </div>
           </div>
         ) : (
-          // Details View
+           // Details View
           <>
             {isLoadingDetails || !selectedAnime ? (
               <div className="flex flex-col items-center justify-center py-32 space-y-4">
@@ -394,22 +415,35 @@ Return ONLY a JSON object with these two fields:
                       </div>
                       <div className="flex flex-col gap-2">
                         <button 
-                          onClick={downloadDetailsJson}
+                          onClick={() => downloadDetailsJson(false)}
                           disabled={downloadingDetails}
-                          className="w-full flex items-center gap-3 bg-slate-900 hover:bg-slate-800 border border-slate-700 p-3 rounded-lg transition-all disabled:opacity-50 text-left"
+                          className="w-full flex items-center justify-between gap-3 bg-slate-900 hover:bg-slate-800 border border-slate-700 p-3 rounded-lg transition-all disabled:opacity-50"
                         >
-                          {downloadingDetails ? <Loader2 className="w-4 h-4 text-indigo-400 shrink-0 animate-spin" /> : <Download className="w-4 h-4 text-indigo-400 shrink-0" />}
-                          <div className="flex flex-col">
+                          <div className="flex items-center gap-3">
+                            {downloadingDetails ? <Loader2 className="w-4 h-4 text-slate-400 shrink-0 animate-spin" /> : <Download className="w-4 h-4 text-slate-400 shrink-0" />}
                             <span className="text-xs font-mono text-slate-300">details.json</span>
-                            {downloadingDetails && <span className="text-[10px] text-indigo-400 font-medium">✨ Enhancing with AI...</span>}
                           </div>
+                          <span className="text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">Original</span>
                         </button>
+                        
+                        <button 
+                          onClick={() => downloadDetailsJson(true)}
+                          disabled={downloadingDetails}
+                          className="w-full flex items-center justify-between gap-3 bg-slate-900 hover:bg-slate-800 border border-slate-700 p-3 rounded-lg transition-all disabled:opacity-50 border-l-2 border-l-indigo-500"
+                        >
+                          <div className="flex items-center gap-3">
+                            {downloadingDetails ? <Loader2 className="w-4 h-4 text-indigo-400 shrink-0 animate-spin" /> : <Wand2 className="w-4 h-4 text-indigo-400 shrink-0" />}
+                            <span className="text-xs font-mono text-slate-300">details.json</span>
+                          </div>
+                          <span className="text-[10px] bg-indigo-500/20 text-indigo-400 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">AI Enhanced</span>
+                        </button>
+                        
                         <button 
                           onClick={downloadEpisodesJson}
                           disabled={downloadingEpisodes || episodes.length === 0}
-                          className="w-full flex items-center gap-3 bg-slate-900 hover:bg-slate-800 border border-slate-700 p-3 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed text-left"
+                          className="w-full flex items-center gap-3 bg-slate-900 hover:bg-slate-800 border border-slate-700 p-3 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed text-left mt-2"
                         >
-                          {downloadingEpisodes ? <Loader2 className="w-4 h-4 text-indigo-400 shrink-0 animate-spin" /> : <Download className="w-4 h-4 text-indigo-400 shrink-0" />}
+                          {downloadingEpisodes ? <Loader2 className="w-4 h-4 text-indigo-400 shrink-0 animate-spin" /> : <Download className="w-4 h-4 text-slate-400 shrink-0" />}
                           <div className="flex flex-col">
                             <span className="text-xs font-mono text-slate-300">episodes.json</span>
                           </div>
@@ -504,6 +538,58 @@ Return ONLY a JSON object with these two fields:
         )}
       </main>
       
+      {/* Settings Modal */}
+      {showSettings && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-6 w-full max-w-md">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-bold text-slate-100 flex items-center gap-2">
+                <Settings className="w-5 h-5 text-indigo-400" />
+                Settings
+              </h2>
+              <button onClick={() => setShowSettings(false)} className="text-slate-400 hover:text-white transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1">
+                  Gemini API Key
+                </label>
+                <div className="flex flex-col gap-2">
+                  <input
+                    type="password"
+                    value={geminiKey}
+                    onChange={(e) => setGeminiKey(e.target.value)}
+                    placeholder="AIzaSy..."
+                    className="w-full bg-slate-950 border border-slate-700 rounded-md py-2 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-slate-200 placeholder:text-slate-600 transition-all font-mono"
+                  />
+                  <p className="text-xs text-slate-500 leading-relaxed">
+                    Required for the <strong className="text-indigo-400 font-semibold">AI Enhanced</strong> feature if deployed as a static APK or standalone app. You can get a free key from Google AI Studio. 
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button 
+                onClick={() => setShowSettings(false)}
+                className="px-4 py-2 rounded-md text-sm font-medium text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 transition-colors"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={saveSettings}
+                className="px-4 py-2 rounded-md text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-500 transition-colors"
+              >
+                Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Global CSS fixes for custom scrollbar */}
       <style>{`
         .custom-scrollbar::-webkit-scrollbar {
