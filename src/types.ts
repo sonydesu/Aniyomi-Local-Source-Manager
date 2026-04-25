@@ -31,6 +31,7 @@ export interface Anime {
   };
   type: string;
   year: number | null;
+  season?: string | null;
   studios: Array<{ name: string }>;
   producers: Array<{ name: string }>;
   licensors: Array<{ name: string }>;

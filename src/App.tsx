@@ -87,31 +87,48 @@ export default function App() {
       selectedAnime.themes?.forEach(g => allGenresSet.add(g.name));
       selectedAnime.demographics?.forEach(g => allGenresSet.add(g.name));
 
-      // Map it to an Aniyomi-esque format, highly detailed
+      let statusNum = 0; // Unknown
+      if (selectedAnime.status?.includes('Finished') || selectedAnime.status?.includes('Complete')) {
+        statusNum = 2; // Completed
+      } else if (selectedAnime.status?.includes('Currently Airing') || selectedAnime.status?.includes('Ongoing')) {
+        statusNum = 1; // Ongoing
+      }
+
+      const altTitlesList = [
+        selectedAnime.title_english, 
+        selectedAnime.title_japanese, 
+        ...(selectedAnime.title_synonyms || [])
+      ].filter(Boolean);
+      const altTitles = [...new Set(altTitlesList)].join(', ');
+
+      const seasonStr = selectedAnime.season 
+        ? `${selectedAnime.season.charAt(0).toUpperCase() + selectedAnime.season.slice(1)} ${selectedAnime.year || ''}`.trim()
+        : selectedAnime.year?.toString() || 'N/A';
+
+      let combinedDescription = selectedAnime.synopsis || '';
+      
+      if (selectedAnime.background) {
+        combinedDescription += `\n\nBackground: ${selectedAnime.background}`;
+      }
+
+      combinedDescription += `\n\nCountry: Japan`;
+      combinedDescription += `\nPremiered: ${seasonStr}`;
+      combinedDescription += `\nDate aired: ${selectedAnime.aired?.string || 'N/A'}`;
+      combinedDescription += `\nDuration: ${selectedAnime.duration || 'N/A'}`;
+      combinedDescription += `\nRating: ${selectedAnime.rating || 'N/A'}`;
+      combinedDescription += `\nMAL rating: ${selectedAnime.score || 'N/A'}`;
+      if (altTitles) {
+        combinedDescription += `\nAlternative Titles: ${altTitles}`;
+      }
+
+      // Map it to an Aniyomi-esque format as requested
       const detailsFormat = {
         title: selectedAnime.title,
-        title_english: selectedAnime.title_english,
-        title_japanese: selectedAnime.title_japanese,
-        synonyms: selectedAnime.title_synonyms || [],
         author: selectedAnime.studios?.map(s => s.name).join(', ') || 'Unknown',
         artist: selectedAnime.studios?.map(s => s.name).join(', ') || 'Unknown',
-        studios: selectedAnime.studios?.map(s => s.name) || [],
-        producers: selectedAnime.producers?.map(s => s.name) || [],
-        licensors: selectedAnime.licensors?.map(s => s.name) || [],
-        description: selectedAnime.synopsis,
-        background: selectedAnime.background,
+        description: combinedDescription.trim(),
         genre: Array.from(allGenresSet),
-        status: selectedAnime.status,
-        score: selectedAnime.score,
-        scored_by: selectedAnime.scored_by,
-        rank: selectedAnime.rank,
-        popularity: selectedAnime.popularity,
-        year: selectedAnime.year,
-        episodes_count: selectedAnime.episodes,
-        duration: selectedAnime.duration,
-        rating: selectedAnime.rating,
-        aired_string: selectedAnime.aired?.string,
-        cover_image: selectedAnime.images?.webp?.large_image_url
+        status: statusNum
       };
 
       const json = JSON.stringify(detailsFormat, null, 2);
@@ -126,19 +143,31 @@ export default function App() {
     setIsDownloading(true);
 
     try {
-      // Create episode data with sub/dub metadata
-      const episodesFormat = episodes.map(ep => ({
-        name: ep.title,
-        episode_number: ep.mal_id,
-        date_upload: ep.aired ? new Date(ep.aired).getTime() : null,
-        filler: ep.filler,
-        recap: ep.recap,
-        sub: true, // Assuming mostly all available local anime has subs
-        dub: !!selectedAnime.title_english, // Simple heuristic for dub existence
-        audio: !!selectedAnime.title_english ? ['ja', 'en'] : ['ja'],
-        subtitles: ['en', 'es', 'fr', 'de', 'pt'], // Granular preferred subtitles
-        resolution: "1080p"
-      }));
+      const isDubbed = !!selectedAnime.title_english;
+      
+      // Create episode data
+      const episodesFormat = episodes.map(ep => {
+        let dateUpload = "1970-01-01T00:00:00";
+        if (ep.aired) {
+          try {
+            const dateObj = new Date(ep.aired);
+            // Format to YYYY-MM-DDTHH:MM:SS locally
+            dateUpload = dateObj.getFullYear() + "-" + 
+                         String(dateObj.getMonth() + 1).padStart(2, '0') + "-" + 
+                         String(dateObj.getDate()).padStart(2, '0') + "T" + 
+                         String(dateObj.getHours()).padStart(2, '0') + ":" + 
+                         String(dateObj.getMinutes()).padStart(2, '0') + ":" + 
+                         String(dateObj.getSeconds()).padStart(2, '0');
+          } catch(e) {}
+        }
+
+        return {
+          episode_number: ep.mal_id,
+          name: `Episode ${ep.mal_id}: ${ep.title}`,
+          date_upload: dateUpload,
+          scanlator: isDubbed ? "Sub, Dub" : "Sub"
+        };
+      });
 
       const json = JSON.stringify(episodesFormat, null, 2);
       downloadFile(json, 'episodes.json');
