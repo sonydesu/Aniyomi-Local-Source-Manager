@@ -84,8 +84,9 @@ export default function App() {
 
   const [downloadingDetails, setDownloadingDetails] = useState(false);
   const [downloadingEpisodes, setDownloadingEpisodes] = useState(false);
+  const [useAIEnhancement, setUseAIEnhancement] = useState(false);
 
-  const downloadDetailsJson = async (enhanceWithAI: boolean = false) => {
+  const downloadDetailsJson = async () => {
     if (!selectedAnime) return;
     setDownloadingDetails(true);
     
@@ -138,11 +139,11 @@ export default function App() {
       let finalDescription = combinedDescription.trim();
 
       // Call AI to enhance description and genres
-      if (enhanceWithAI) {
+      if (useAIEnhancement) {
         try {
           const apiKeyToUse = geminiKey || process.env.GEMINI_API_KEY;
           if (!apiKeyToUse) {
-            throw new Error("Missing Gemini API Key. Please click the Settings gear icon to add your own key, or use Original details.");
+            throw new Error("Missing Gemini API Key. Please click the Settings gear icon to add your own key, or disable AI enhancement.");
           }
 
           const ai = new GoogleGenAI({ apiKey: apiKeyToUse });
@@ -161,7 +162,7 @@ Return ONLY a JSON object with these two fields:
 }`;
 
           const response = await ai.models.generateContent({
-            model: "gemini-3.1-pro-preview",
+            model: "gemini-2.5-flash",
             contents: promptText,
             config: {
               responseMimeType: "application/json",
@@ -413,29 +414,39 @@ Return ONLY a JSON object with these two fields:
                         <h3 className="text-sm font-semibold text-indigo-100">Local Export Toolkit</h3>
                         <span className="text-[10px] px-2 py-0.5 bg-indigo-500 text-white rounded-full font-bold">2.0</span>
                       </div>
+                      
+                      {/* AI Enhancement Toggle */}
+                      <div className="flex items-center justify-between bg-slate-950/50 p-2.5 rounded-lg border border-slate-800">
+                        <div className={`flex items-center gap-2 text-sm transition-colors ${useAIEnhancement ? 'text-indigo-300' : 'text-slate-400'}`}>
+                          <Wand2 className="w-4 h-4" />
+                          <span className="font-medium">AI Enhanced</span>
+                        </div>
+                        <button 
+                          type="button"
+                          role="switch"
+                          aria-checked={useAIEnhancement}
+                          onClick={() => setUseAIEnhancement(!useAIEnhancement)}
+                          className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-slate-900 ${useAIEnhancement ? 'bg-indigo-500' : 'bg-slate-700'}`}
+                        >
+                          <span aria-hidden="true" className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${useAIEnhancement ? 'translate-x-2' : '-translate-x-2'}`} />
+                        </button>
+                      </div>
+
                       <div className="flex flex-col gap-2">
                         <button 
-                          onClick={() => downloadDetailsJson(false)}
+                          onClick={() => downloadDetailsJson()}
                           disabled={downloadingDetails}
                           className="w-full flex items-center justify-between gap-3 bg-slate-900 hover:bg-slate-800 border border-slate-700 p-3 rounded-lg transition-all disabled:opacity-50"
                         >
                           <div className="flex items-center gap-3">
-                            {downloadingDetails ? <Loader2 className="w-4 h-4 text-slate-400 shrink-0 animate-spin" /> : <Download className="w-4 h-4 text-slate-400 shrink-0" />}
+                            {downloadingDetails ? (
+                              <Loader2 className={`w-4 h-4 shrink-0 animate-spin ${useAIEnhancement ? 'text-indigo-400' : 'text-slate-400'}`} />
+                            ) : (
+                              <Download className={`w-4 h-4 shrink-0 ${useAIEnhancement ? 'text-indigo-400' : 'text-slate-400'}`} />
+                            )}
                             <span className="text-xs font-mono text-slate-300">details.json</span>
                           </div>
-                          <span className="text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">Original</span>
-                        </button>
-                        
-                        <button 
-                          onClick={() => downloadDetailsJson(true)}
-                          disabled={downloadingDetails}
-                          className="w-full flex items-center justify-between gap-3 bg-slate-900 hover:bg-slate-800 border border-slate-700 p-3 rounded-lg transition-all disabled:opacity-50 border-l-2 border-l-indigo-500"
-                        >
-                          <div className="flex items-center gap-3">
-                            {downloadingDetails ? <Loader2 className="w-4 h-4 text-indigo-400 shrink-0 animate-spin" /> : <Wand2 className="w-4 h-4 text-indigo-400 shrink-0" />}
-                            <span className="text-xs font-mono text-slate-300">details.json</span>
-                          </div>
-                          <span className="text-[10px] bg-indigo-500/20 text-indigo-400 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">AI Enhanced</span>
+                          {useAIEnhancement && <span className="text-[10px] bg-indigo-500/20 text-indigo-400 px-1.5 py-0.5 rounded font-bold tracking-wider">AI</span>}
                         </button>
                         
                         <button 
