@@ -207,7 +207,7 @@ export default function App() {
                 A
               </div>
             )}
-            <span className="text-lg font-semibold tracking-tight hidden sm:block">Aniyomi <span className="text-slate-500 font-normal">Local Manager</span></span>
+            <span className="text-lg font-semibold tracking-tight hidden sm:block">Aniyomi <span className="text-slate-500 font-normal">LocalSource Manager</span></span>
             <span className="text-lg font-semibold tracking-tight sm:hidden">Aniyomi</span>
           </div>
           
