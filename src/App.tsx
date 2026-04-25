@@ -241,9 +241,9 @@ export default function App() {
             )}
 
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6">
-              {results.map((anime) => (
+              {results.map((anime, index) => (
                 <div 
-                  key={anime.mal_id}
+                  key={`${anime.mal_id}-${index}`}
                   onClick={() => openDetails(anime.mal_id)}
                   className="group cursor-pointer flex flex-col gap-3 relative transition-all duration-300"
                 >
@@ -388,8 +388,8 @@ export default function App() {
                         <p className="text-slate-500 italic bg-slate-900/50 border border-slate-800 p-4 rounded-lg text-sm">No episode data available for this anime.</p>
                       ) : (
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 overflow-y-auto pr-2 custom-scrollbar pb-8">
-                          {episodes.map(ep => (
-                            <div key={ep.mal_id} className="bg-slate-900/50 border border-slate-800 hover:bg-slate-800/80 hover:border-slate-700 p-3 rounded-lg flex items-center gap-3 transition-colors h-16">
+                          {episodes.map((ep, index) => (
+                            <div key={`${ep.mal_id}-${index}`} className="bg-slate-900/50 border border-slate-800 hover:bg-slate-800/80 hover:border-slate-700 p-3 rounded-lg flex items-center gap-3 transition-colors h-16">
                                <div className="text-sm font-bold text-indigo-400 bg-slate-950 border border-slate-800 shadow-inner py-1 w-12 text-center rounded shrink-0 font-mono">
                                  <span className="text-[10px] text-slate-600 mr-0.5">EP</span>{ep.mal_id}
                                </div>
