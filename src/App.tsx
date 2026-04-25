@@ -10,6 +10,16 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [errorHeader, setErrorHeader] = useState('');
 
+  // App Settings State
+  const [titleLanguage, setTitleLanguage] = useState<'english' | 'romaji'>('english');
+
+  const getDisplayTitle = (anime: Anime) => {
+    if (titleLanguage === 'english' && anime.title_english) {
+      return anime.title_english;
+    }
+    return anime.title;
+  };
+
   // Details View State
   const [selectedAnime, setSelectedAnime] = useState<Anime | null>(null);
   const [episodes, setEpisodes] = useState<Episode[]>([]);
@@ -85,6 +95,7 @@ export default function App() {
         synonyms: selectedAnime.title_synonyms || [],
         author: selectedAnime.studios?.map(s => s.name).join(', ') || 'Unknown',
         artist: selectedAnime.studios?.map(s => s.name).join(', ') || 'Unknown',
+        studios: selectedAnime.studios?.map(s => s.name) || [],
         producers: selectedAnime.producers?.map(s => s.name) || [],
         licensors: selectedAnime.licensors?.map(s => s.name) || [],
         description: selectedAnime.synopsis,
@@ -125,7 +136,8 @@ export default function App() {
         sub: true, // Assuming mostly all available local anime has subs
         dub: !!selectedAnime.title_english, // Simple heuristic for dub existence
         audio: !!selectedAnime.title_english ? ['ja', 'en'] : ['ja'],
-        subtitles: ['en']
+        subtitles: ['en', 'es', 'fr', 'de', 'pt'], // Granular preferred subtitles
+        resolution: "1080p"
       }));
 
       const json = JSON.stringify(episodesFormat, null, 2);
@@ -170,8 +182,23 @@ export default function App() {
             <span className="text-lg font-semibold tracking-tight sm:hidden">Aniyomi</span>
           </div>
           
-          {!selectedId && (
-            <div className="flex items-center gap-4 flex-1 justify-end">
+          <div className="flex items-center gap-4 flex-1 justify-end">
+            <div className="hidden sm:flex items-center gap-1 bg-slate-900 border border-slate-800 p-1 rounded-md shadow-inner overflow-hidden">
+              <button
+                onClick={() => setTitleLanguage('english')}
+                className={`text-[10px] uppercase tracking-wider px-2 py-1 rounded-sm font-bold transition-all ${titleLanguage === 'english' ? 'bg-indigo-500 text-white shadow-sm' : 'text-slate-500 hover:text-slate-300'}`}
+              >
+                EN
+              </button>
+              <button
+                onClick={() => setTitleLanguage('romaji')}
+                className={`text-[10px] uppercase tracking-wider px-2 py-1 rounded-sm font-bold transition-all ${titleLanguage === 'romaji' ? 'bg-indigo-500 text-white shadow-sm' : 'text-slate-500 hover:text-slate-300'}`}
+              >
+                Orig
+              </button>
+            </div>
+
+            {!selectedId && (
               <div className="relative w-full max-w-md">
                 <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
                 <input
@@ -182,8 +209,8 @@ export default function App() {
                   className="w-full bg-slate-800 border border-slate-700 rounded-md py-1.5 pl-10 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-slate-200 placeholder:text-slate-500 transition-all"
                 />
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </header>
 
@@ -237,8 +264,8 @@ export default function App() {
                     )}
                   </div>
                   <div>
-                    <h3 className="font-medium text-sm leading-tight text-slate-300 group-hover:text-indigo-400 transition-colors truncate">
-                      {anime.title}
+                    <h3 className="font-medium text-sm leading-tight text-slate-300 group-hover:text-indigo-400 transition-colors line-clamp-2" title={getDisplayTitle(anime)}>
+                      {getDisplayTitle(anime)}
                     </h3>
                     <div className="text-xs text-slate-500 mt-1 flex items-center gap-2 truncate">
                       {anime.type} • {anime.episodes ? `${anime.episodes} Ep` : 'Ongoing'}
@@ -303,10 +330,18 @@ export default function App() {
                   <div className="flex-1 flex flex-col">
                     <div>
                       <h1 className="text-4xl font-bold text-white mb-2 leading-tight">
-                        {selectedAnime.title}
+                        {getDisplayTitle(selectedAnime)}
                       </h1>
-                      {selectedAnime.title_english && selectedAnime.title_english !== selectedAnime.title && (
-                        <h3 className="text-lg text-slate-500 font-medium mb-4">{selectedAnime.title_english}</h3>
+                      {(selectedAnime.title_english || selectedAnime.title_japanese) && (
+                        <h3 className="text-lg text-slate-500 font-medium mb-4 flex flex-wrap items-center gap-2">
+                          {titleLanguage === 'english' ? selectedAnime.title : selectedAnime.title_english} 
+                          {selectedAnime.title_japanese && (
+                            <>
+                              <span className="text-slate-700 mx-1">•</span> 
+                              <span className="text-slate-400 font-serif">{selectedAnime.title_japanese}</span>
+                            </>
+                          )}
+                        </h3>
                       )}
                       
                       <div className="flex flex-wrap gap-2 mb-6 mt-4">
@@ -355,8 +390,8 @@ export default function App() {
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 overflow-y-auto pr-2 custom-scrollbar pb-8">
                           {episodes.map(ep => (
                             <div key={ep.mal_id} className="bg-slate-900/50 border border-slate-800 hover:bg-slate-800/80 hover:border-slate-700 p-3 rounded-lg flex items-center gap-3 transition-colors h-16">
-                               <div className="text-lg font-bold text-slate-600 w-8 text-center shrink-0 font-mono">
-                                 {ep.mal_id}
+                               <div className="text-sm font-bold text-indigo-400 bg-slate-950 border border-slate-800 shadow-inner py-1 w-12 text-center rounded shrink-0 font-mono">
+                                 <span className="text-[10px] text-slate-600 mr-0.5">EP</span>{ep.mal_id}
                                </div>
                                <div className="flex flex-col overflow-hidden justify-center h-full">
                                  <span className="font-medium text-sm text-slate-300 truncate leading-tight" title={ep.title}>{ep.title}</span>
