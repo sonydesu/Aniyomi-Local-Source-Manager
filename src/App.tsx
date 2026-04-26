@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { ArrowLeft, Search, Download, Star, Tv, Calendar, Info, PlayCircle, Loader2, Settings, X, Wand2, Archive, FolderDown } from 'lucide-react';
+import { ArrowLeft, Search, Download, Star, Tv, Calendar, Info, PlayCircle, Loader2, Settings, X, Wand2, Archive, FolderDown, FolderCheck } from 'lucide-react';
 import { GoogleGenAI, Type } from '@google/genai';
 import JSZip from 'jszip';
 import { searchAnime, getAnimeDetails, getAnimeEpisodes } from './api';
 import { Anime, Episode } from './types';
+import { saveDirHandle, getDirHandle, verifyPermission } from './db';
 
 export default function App() {
   const [query, setQuery] = useState('');
@@ -16,10 +17,32 @@ export default function App() {
   const [titleLanguage, setTitleLanguage] = useState<'english' | 'romaji'>('english');
   const [showSettings, setShowSettings] = useState(false);
   const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
+  const [dirHandle, setDirHandle] = useState<any>(null);
+  const hasFSAPI = 'showDirectoryPicker' in window;
+
+  useEffect(() => {
+    if (hasFSAPI) {
+      getDirHandle().then(handle => {
+        if (handle) setDirHandle(handle);
+      }).catch(console.error);
+    }
+  }, []);
 
   const saveSettings = () => {
     localStorage.setItem('gemini_api_key', geminiKey);
     setShowSettings(false);
+  };
+
+  const pickDirectory = async () => {
+    if (!hasFSAPI) return;
+    try {
+      const handle = await (window as any).showDirectoryPicker({ mode: 'readwrite' });
+      await saveDirHandle(handle);
+      setDirHandle(handle);
+      alert('Directory selected and saved successfully!');
+    } catch (err: any) {
+      if (err.name !== 'AbortError') console.error('Failed to pick directory:', err);
+    }
   };
 
   const getDisplayTitle = (anime: Anime) => {
@@ -273,19 +296,30 @@ Return ONLY a JSON object with these two fields:
 
   const handleExportDirect = async () => {
     if (!selectedAnime) return;
-    if (!('showDirectoryPicker' in window)) {
+    if (!hasFSAPI) {
        alert('Direct folder access is not supported on this browser (this is common on Android and mobile wrappers). Please use the "Export as ZIP" option instead to download and extract into your Aniyomi folder.');
        return;
     }
     
     setIsExporting(true);
     try {
-       const dirHandle = await (window as any).showDirectoryPicker({
-           mode: 'readwrite'
-       });
+       let targetDirHandle = dirHandle;
+       
+       if (!targetDirHandle) {
+           targetDirHandle = await (window as any).showDirectoryPicker({
+               mode: 'readwrite'
+           });
+           await saveDirHandle(targetDirHandle);
+           setDirHandle(targetDirHandle);
+       } else {
+           const hasPermission = await verifyPermission(targetDirHandle, true);
+           if (!hasPermission) {
+               throw new Error("Permission to access the saved folder was denied.");
+           }
+       }
 
        const folderName = selectedAnime.title.replace(/[\/\\?%*:|"<>]/g, '-');
-       const animeFolderHandle = await dirHandle.getDirectoryHandle(folderName, { create: true });
+       const animeFolderHandle = await targetDirHandle.getDirectoryHandle(folderName, { create: true });
 
        const detailsJson = await getDetailsData();
        const episodesJson = await getEpisodesData();
@@ -634,6 +668,55 @@ Return ONLY a JSON object with these two fields:
                   />
                   <p className="text-xs text-slate-500 leading-relaxed">
                     Required for the <strong className="text-indigo-400 font-semibold">AI Enhanced</strong> feature if deployed as a static APK or standalone app. You can get a free key from Google AI Studio. 
+                  </p>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1">
+                  Aniyomi Local Source Folder
+                </label>
+                <div className="flex flex-col gap-2">
+                  {hasFSAPI ? (
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={pickDirectory}
+                        className="flex-1 flex items-center justify-center gap-2 bg-slate-950 border border-slate-700 hover:border-slate-600 rounded-md py-2 px-3 text-sm transition-all text-slate-200"
+                      >
+                        {dirHandle ? (
+                          <>
+                            <FolderCheck className="w-4 h-4 text-emerald-400" />
+                            <span>Folder Selected: {dirHandle.name}</span>
+                          </>
+                        ) : (
+                          <>
+                            <FolderDown className="w-4 h-4 text-slate-400" />
+                            <span>Select Folder</span>
+                          </>
+                        )}
+                      </button>
+                      {dirHandle && (
+                        <button
+                          onClick={async () => {
+                            await saveDirHandle(null);
+                            setDirHandle(null);
+                          }}
+                          className="p-2 bg-slate-950 border border-slate-700 hover:bg-red-500/20 hover:border-red-500/50 hover:text-red-400 rounded-md text-slate-400 transition-all"
+                          title="Clear Folder"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="bg-amber-900/20 border border-amber-500/30 rounded-md p-3">
+                      <p className="text-xs text-amber-200 leading-relaxed text-center font-medium">
+                        Direct folder access is not supported on Android/WebView. You must use the "Export as ZIP" feature instead.
+                      </p>
+                    </div>
+                  )}
+                  <p className="text-xs text-slate-500 leading-relaxed">
+                    Automatically export to this folder when using <strong>Direct Export</strong>. Usually located at <code className="bg-slate-800 px-1 py-0.5 rounded text-slate-400">/sdcard/Aniyomi/local</code>.
                   </p>
                 </div>
               </div>
