@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { ArrowLeft, Search, Download, Star, Tv, Calendar, Info, PlayCircle, Loader2, Settings, X, Wand2 } from 'lucide-react';
+import { ArrowLeft, Search, Download, Star, Tv, Calendar, Info, PlayCircle, Loader2, Settings, X, Wand2, Archive, FolderDown } from 'lucide-react';
 import { GoogleGenAI, Type } from '@google/genai';
+import JSZip from 'jszip';
 import { searchAnime, getAnimeDetails, getAnimeEpisodes } from './api';
 import { Anime, Episode } from './types';
 
@@ -82,72 +83,69 @@ export default function App() {
     setEpisodes([]);
   };
 
-  const [downloadingDetails, setDownloadingDetails] = useState(false);
-  const [downloadingEpisodes, setDownloadingEpisodes] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [useAIEnhancement, setUseAIEnhancement] = useState(false);
 
-  const downloadDetailsJson = async () => {
-    if (!selectedAnime) return;
-    setDownloadingDetails(true);
+  const getDetailsData = async (): Promise<string | null> => {
+    if (!selectedAnime) return null;
     
-    try {
-      let finalGenres = Array.from(new Set([
-        ...(selectedAnime.genres?.map(g => g.name) || []),
-        ...(selectedAnime.explicit_genres?.map(g => g.name) || []),
-        ...(selectedAnime.themes?.map(g => g.name) || []),
-        ...(selectedAnime.demographics?.map(g => g.name) || [])
-      ]));
+    let finalGenres = Array.from(new Set([
+      ...(selectedAnime.genres?.map(g => g.name) || []),
+      ...(selectedAnime.explicit_genres?.map(g => g.name) || []),
+      ...(selectedAnime.themes?.map(g => g.name) || []),
+      ...(selectedAnime.demographics?.map(g => g.name) || [])
+    ]));
 
-      let statusNum = 0; // Unknown
-      if (selectedAnime.status?.includes('Finished') || selectedAnime.status?.includes('Complete')) {
-        statusNum = 2; // Completed
-      } else if (selectedAnime.status?.includes('Currently Airing') || selectedAnime.status?.includes('Ongoing')) {
-        statusNum = 1; // Ongoing
-      }
+    let statusNum = 0; // Unknown
+    if (selectedAnime.status?.includes('Finished') || selectedAnime.status?.includes('Complete')) {
+      statusNum = 2; // Completed
+    } else if (selectedAnime.status?.includes('Currently Airing') || selectedAnime.status?.includes('Ongoing')) {
+      statusNum = 1; // Ongoing
+    }
 
-      const altTitlesList = [
-        selectedAnime.title_english, 
-        selectedAnime.title_japanese, 
-        ...(selectedAnime.title_synonyms || [])
-      ].filter(Boolean);
-      const altTitles = [...new Set(altTitlesList)].join(', ');
+    const altTitlesList = [
+      selectedAnime.title_english, 
+      selectedAnime.title_japanese, 
+      ...(selectedAnime.title_synonyms || [])
+    ].filter(Boolean);
+    const altTitles = [...new Set(altTitlesList)].join(', ');
 
-      const seasonStr = selectedAnime.season 
-        ? `${selectedAnime.season.charAt(0).toUpperCase() + selectedAnime.season.slice(1)} ${selectedAnime.year || ''}`.trim()
-        : selectedAnime.year?.toString() || 'N/A';
+    const seasonStr = selectedAnime.season 
+      ? `${selectedAnime.season.charAt(0).toUpperCase() + selectedAnime.season.slice(1)} ${selectedAnime.year || ''}`.trim()
+      : selectedAnime.year?.toString() || 'N/A';
 
-      let combinedDescription = selectedAnime.synopsis || '';
-      
-      let metaFooter = '';
-      if (selectedAnime.background) {
-        metaFooter += `\n\nBackground: ${selectedAnime.background}`;
-      } else {
-        metaFooter += `\n\n`;
-      }
+    let combinedDescription = selectedAnime.synopsis || '';
+    
+    let metaFooter = '';
+    if (selectedAnime.background) {
+      metaFooter += `\n\nBackground: ${selectedAnime.background}`;
+    } else {
+      metaFooter += `\n\n`;
+    }
 
-      metaFooter += `Country: Japan`;
-      metaFooter += `\nPremiered: ${seasonStr}`;
-      metaFooter += `\nDate aired: ${selectedAnime.aired?.string || 'N/A'}`;
-      metaFooter += `\nDuration: ${selectedAnime.duration || 'N/A'}`;
-      metaFooter += `\nRating: ${selectedAnime.rating || 'N/A'}`;
-      metaFooter += `\nMAL rating: ${selectedAnime.score || 'N/A'}`;
-      if (altTitles) {
-        metaFooter += `\nAlternative Titles: ${altTitles}`;
-      }
+    metaFooter += `Country: Japan`;
+    metaFooter += `\nPremiered: ${seasonStr}`;
+    metaFooter += `\nDate aired: ${selectedAnime.aired?.string || 'N/A'}`;
+    metaFooter += `\nDuration: ${selectedAnime.duration || 'N/A'}`;
+    metaFooter += `\nRating: ${selectedAnime.rating || 'N/A'}`;
+    metaFooter += `\nMAL rating: ${selectedAnime.score || 'N/A'}`;
+    if (altTitles) {
+      metaFooter += `\nAlternative Titles: ${altTitles}`;
+    }
 
-      combinedDescription += metaFooter;
-      let finalDescription = combinedDescription.trim();
+    combinedDescription += metaFooter;
+    let finalDescription = combinedDescription.trim();
 
-      // Call AI to enhance description and genres
-      if (useAIEnhancement) {
-        try {
-          const apiKeyToUse = geminiKey || process.env.GEMINI_API_KEY;
-          if (!apiKeyToUse) {
-            throw new Error("Missing Gemini API Key. Please click the Settings gear icon to add your own key, or disable AI enhancement.");
-          }
+    // Call AI to enhance description and genres
+    if (useAIEnhancement) {
+      try {
+        const apiKeyToUse = geminiKey || process.env.GEMINI_API_KEY;
+        if (!apiKeyToUse) {
+          throw new Error("Missing Gemini API Key. Please click the Settings gear icon to add your own key, or disable AI enhancement.");
+        }
 
-          const ai = new GoogleGenAI({ apiKey: apiKeyToUse });
-          const promptText = `You are an expert otaku AI focusing on anime. 
+        const ai = new GoogleGenAI({ apiKey: apiKeyToUse });
+        const promptText = `You are an expert otaku AI focusing on anime. 
 Here is basic info for the anime '${selectedAnime.title}':
 ${selectedAnime.synopsis || "No description available."}
 Current Genres/Tags: ${finalGenres.join(", ")}
@@ -161,108 +159,160 @@ Return ONLY a JSON object with these two fields:
   "genres": ["Action", "Sci-Fi", "Mecha", "etc..."]
 }`;
 
-          const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: promptText,
-            config: {
-              responseMimeType: "application/json",
-              responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                  description: { type: Type.STRING },
-                  genres: {
-                    type: Type.ARRAY,
-                    items: { type: Type.STRING }
-                  }
-                },
-                required: ["description", "genres"]
-              }
-            }
-          });
-
-          const textRes = response.text;
-          if (textRes) {
-            const aiData = JSON.parse(textRes);
-            if (aiData.description) {
-              finalDescription = aiData.description.trim() + "\n" + metaFooter;
-            }
-            if (aiData.genres && Array.isArray(aiData.genres)) {
-              finalGenres = [...new Set([...finalGenres, ...aiData.genres])];
+        const response = await ai.models.generateContent({
+          model: "gemini-1.5-flash",
+          contents: promptText,
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                description: { type: Type.STRING },
+                genres: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING }
+                }
+              },
+              required: ["description", "genres"]
             }
           }
-        } catch (aiError: any) {
-          console.error("AI enhancement failed:", aiError);
-          alert(`AI enhancement failed: ${aiError.message || "Unknown error."}\nFalling back to original data.`);
+        });
+
+        const textRes = response.text;
+        if (textRes) {
+          const aiData = JSON.parse(textRes);
+          if (aiData.description) {
+            finalDescription = aiData.description.trim() + "\n" + metaFooter;
+          }
+          if (aiData.genres && Array.isArray(aiData.genres)) {
+            finalGenres = [...new Set([...finalGenres, ...aiData.genres])];
+          }
         }
+      } catch (aiError: any) {
+        console.error("AI enhancement failed:", aiError);
+        alert(`AI enhancement failed: ${aiError.message || "Unknown error."}\nFalling back to original data.`);
+      }
+    }
+
+    // Map it to an Aniyomi-esque format as requested
+    const detailsFormat = {
+      title: selectedAnime.title,
+      author: selectedAnime.studios?.map(s => s.name).join(', ') || 'Unknown',
+      artist: selectedAnime.studios?.map(s => s.name).join(', ') || 'Unknown',
+      description: finalDescription,
+      genre: finalGenres,
+      status: statusNum
+    };
+
+    return JSON.stringify(detailsFormat, null, 2);
+  };
+
+  const getEpisodesData = async (): Promise<string | null> => {
+    if (!selectedAnime || episodes.length === 0) return null;
+
+    const isDubbed = !!selectedAnime.title_english;
+    
+    // Create episode data
+    const episodesFormat = episodes.map(ep => {
+      let dateUpload = "1970-01-01T00:00:00";
+      if (ep.aired) {
+        try {
+          const dateObj = new Date(ep.aired);
+          // Format to YYYY-MM-DDTHH:MM:SS locally
+          dateUpload = dateObj.getFullYear() + "-" + 
+                       String(dateObj.getMonth() + 1).padStart(2, '0') + "-" + 
+                       String(dateObj.getDate()).padStart(2, '0') + "T" + 
+                       String(dateObj.getHours()).padStart(2, '0') + ":" + 
+                       String(dateObj.getMinutes()).padStart(2, '0') + ":" + 
+                       String(dateObj.getSeconds()).padStart(2, '0');
+        } catch(e) {}
       }
 
-      // Map it to an Aniyomi-esque format as requested
-      const detailsFormat = {
-        title: selectedAnime.title,
-        author: selectedAnime.studios?.map(s => s.name).join(', ') || 'Unknown',
-        artist: selectedAnime.studios?.map(s => s.name).join(', ') || 'Unknown',
-        description: finalDescription,
-        genre: finalGenres,
-        status: statusNum
+      return {
+        episode_number: ep.mal_id,
+        name: `Episode ${ep.mal_id}: ${ep.title}`,
+        date_upload: dateUpload,
+        scanlator: isDubbed ? "Sub, Dub" : "Sub"
       };
+    });
 
-      const json = JSON.stringify(detailsFormat, null, 2);
-      downloadFile(json, 'details.json');
-    } catch (error) {
-      console.error("Error generating details:", error);
-    } finally {
-      setDownloadingDetails(false);
-    }
+    return JSON.stringify(episodesFormat, null, 2);
   };
 
-  const downloadEpisodesJson = async () => {
-    if (!selectedAnime) return;
-    setDownloadingEpisodes(true);
+  const handleExportZip = async () => {
+     if (!selectedAnime) return;
+     setIsExporting(true);
+     try {
+        const detailsJson = await getDetailsData();
+        const episodesJson = await getEpisodesData();
 
-    try {
-      const isDubbed = !!selectedAnime.title_english;
-      
-      // Create episode data
-      const episodesFormat = episodes.map(ep => {
-        let dateUpload = "1970-01-01T00:00:00";
-        if (ep.aired) {
-          try {
-            const dateObj = new Date(ep.aired);
-            // Format to YYYY-MM-DDTHH:MM:SS locally
-            dateUpload = dateObj.getFullYear() + "-" + 
-                         String(dateObj.getMonth() + 1).padStart(2, '0') + "-" + 
-                         String(dateObj.getDate()).padStart(2, '0') + "T" + 
-                         String(dateObj.getHours()).padStart(2, '0') + ":" + 
-                         String(dateObj.getMinutes()).padStart(2, '0') + ":" + 
-                         String(dateObj.getSeconds()).padStart(2, '0');
-          } catch(e) {}
+        const zip = new JSZip();
+        const folderName = selectedAnime.title.replace(/[\/\\?%*:|"<>]/g, '-');
+        const folder = zip.folder(folderName);
+        if (folder) {
+           if (detailsJson) folder.file('details.json', detailsJson);
+           if (episodesJson) folder.file('episodes.json', episodesJson);
         }
-
-        return {
-          episode_number: ep.mal_id,
-          name: `Episode ${ep.mal_id}: ${ep.title}`,
-          date_upload: dateUpload,
-          scanlator: isDubbed ? "Sub, Dub" : "Sub"
-        };
-      });
-
-      const json = JSON.stringify(episodesFormat, null, 2);
-      downloadFile(json, 'episodes.json');
-    } finally {
-      setDownloadingEpisodes(false);
-    }
+        
+        const blob = await zip.generateAsync({ type: 'blob' });
+        
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${folderName}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+     } catch (err: any) {
+        alert('Export failed: ' + err.message);
+     } finally {
+        setIsExporting(false);
+     }
   };
 
-  const downloadFile = (content: string, filename: string) => {
-    const blob = new Blob([content], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+  const handleExportDirect = async () => {
+    if (!selectedAnime) return;
+    if (!('showDirectoryPicker' in window)) {
+       alert('Direct folder access is not supported on this browser (this is common on Android and mobile wrappers). Please use the "Export as ZIP" option instead to download and extract into your Aniyomi folder.');
+       return;
+    }
+    
+    setIsExporting(true);
+    try {
+       const dirHandle = await (window as any).showDirectoryPicker({
+           mode: 'readwrite'
+       });
+
+       const folderName = selectedAnime.title.replace(/[\/\\?%*:|"<>]/g, '-');
+       const animeFolderHandle = await dirHandle.getDirectoryHandle(folderName, { create: true });
+
+       const detailsJson = await getDetailsData();
+       const episodesJson = await getEpisodesData();
+
+       if (detailsJson) {
+           const detailsFileHandle = await animeFolderHandle.getFileHandle('details.json', { create: true });
+           const detailsWritable = await detailsFileHandle.createWritable();
+           await detailsWritable.write(detailsJson);
+           await detailsWritable.close();
+       }
+
+       if (episodesJson) {
+           const episodesFileHandle = await animeFolderHandle.getFileHandle('episodes.json', { create: true });
+           const episodesWritable = await episodesFileHandle.createWritable();
+           await episodesWritable.write(episodesJson);
+           await episodesWritable.close();
+       }
+
+       alert(`Successfully created folder "${folderName}" and saved details.json & episodes.json!`);
+
+    } catch (err: any) {
+       if (err.name !== 'AbortError') {
+           alert('Export failed: ' + err.message);
+       }
+    } finally {
+       setIsExporting(false);
+    }
   };
 
   return (
@@ -434,29 +484,35 @@ Return ONLY a JSON object with these two fields:
 
                       <div className="flex flex-col gap-2">
                         <button 
-                          onClick={() => downloadDetailsJson()}
-                          disabled={downloadingDetails}
+                          onClick={handleExportZip}
+                          disabled={isExporting}
                           className="w-full flex items-center justify-between gap-3 bg-slate-900 hover:bg-slate-800 border border-slate-700 p-3 rounded-lg transition-all disabled:opacity-50"
                         >
                           <div className="flex items-center gap-3">
-                            {downloadingDetails ? (
+                            {isExporting ? (
                               <Loader2 className={`w-4 h-4 shrink-0 animate-spin ${useAIEnhancement ? 'text-indigo-400' : 'text-slate-400'}`} />
                             ) : (
-                              <Download className={`w-4 h-4 shrink-0 ${useAIEnhancement ? 'text-indigo-400' : 'text-slate-400'}`} />
+                              <Archive className={`w-4 h-4 shrink-0 ${useAIEnhancement ? 'text-indigo-400' : 'text-slate-400'}`} />
                             )}
-                            <span className="text-xs font-mono text-slate-300">details.json</span>
+                            <div className="flex flex-col text-left">
+                              <span className="text-xs font-semibold text-slate-200">Export as ZIP package</span>
+                              <span className="text-[10px] text-slate-500">Recommended for Android & APKs</span>
+                            </div>
                           </div>
                           {useAIEnhancement && <span className="text-[10px] bg-indigo-500/20 text-indigo-400 px-1.5 py-0.5 rounded font-bold tracking-wider">AI</span>}
                         </button>
                         
                         <button 
-                          onClick={downloadEpisodesJson}
-                          disabled={downloadingEpisodes || episodes.length === 0}
-                          className="w-full flex items-center gap-3 bg-slate-900 hover:bg-slate-800 border border-slate-700 p-3 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed text-left mt-2"
+                          onClick={handleExportDirect}
+                          disabled={isExporting}
+                          className="w-full flex items-center justify-between gap-3 bg-slate-950 hover:bg-slate-900 border border-slate-800 p-3 rounded-lg transition-all disabled:opacity-50 mt-2"
                         >
-                          {downloadingEpisodes ? <Loader2 className="w-4 h-4 text-indigo-400 shrink-0 animate-spin" /> : <Download className="w-4 h-4 text-slate-400 shrink-0" />}
-                          <div className="flex flex-col">
-                            <span className="text-xs font-mono text-slate-300">episodes.json</span>
+                           <div className="flex items-center gap-3">
+                            {isExporting ? <Loader2 className="w-4 h-4 text-slate-500 shrink-0 animate-spin" /> : <FolderDown className="w-4 h-4 text-slate-500 shrink-0" />}
+                            <div className="flex flex-col text-left">
+                              <span className="text-xs font-semibold text-slate-400">Save to Local Folder directly</span>
+                              <span className="text-[10px] text-slate-600">Requires Desktop Browser support</span>
+                            </div>
                           </div>
                         </button>
                       </div>
