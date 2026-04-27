@@ -737,7 +737,7 @@ Return ONLY a JSON object with this shape: { "genres": ["string", "string"] }`;
                         <div className="bg-indigo-100 dark:bg-indigo-900/20 border border-indigo-300 dark:border-indigo-500/30 p-5 rounded-xl flex flex-col gap-4">
                           <div className="flex items-center justify-between">
                             <h3 className="text-sm font-semibold text-indigo-900 dark:text-indigo-100">Local Export Toolkit</h3>
-                            <span className="text-[10px] px-2 py-0.5 bg-indigo-500 text-white rounded-full font-bold">2.0</span>
+                            <span className="text-[10px] px-2 py-0.5 bg-indigo-500 text-white rounded-full font-bold">3.0</span>
                           </div>
                           
                           {/* AI Enhancement Toggle */}

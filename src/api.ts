@@ -17,7 +17,13 @@ export async function searchAnime(query: string, page: number = 1): Promise<Anim
     if (response.status === 429) {
       throw new Error('Rate limit exceeded. Please wait a moment and try again.');
     }
-    throw new Error('Failed to search anime.');
+    if (response.status === 404) {
+      throw new Error('No anime found for the given search query.');
+    }
+    if (response.status >= 500) {
+      throw new Error(`Jikan API Server Error (${response.status}). Please try again later.`);
+    }
+    throw new Error(`Failed to search anime (Status: ${response.status}).`);
   }
 
   const result: ApiResponse<Anime[]> = await response.json();
@@ -27,7 +33,16 @@ export async function searchAnime(query: string, page: number = 1): Promise<Anim
 export async function getAnimeDetails(id: number): Promise<Anime> {
   const response = await fetch(`${JIKAN_BASE_URL}/anime/${id}`);
   if (!response.ok) {
-    throw new Error('Failed to fetch anime details.');
+    if (response.status === 429) {
+      throw new Error('Rate limit exceeded. Please wait a moment and try again.');
+    }
+    if (response.status === 404) {
+      throw new Error('Anime details not found (404). It may have been removed.');
+    }
+    if (response.status >= 500) {
+      throw new Error(`Jikan API Server Error (${response.status}). Please try again later.`);
+    }
+    throw new Error(`Failed to fetch anime details (Status: ${response.status}).`);
   }
   const result: ApiResponse<Anime> = await response.json();
   return result.data;
@@ -46,7 +61,15 @@ export async function getAnimeEpisodes(id: number): Promise<Episode[]> {
             await delay(1000);
             continue;
         }
-        console.warn('Failed to fetch episodes or episode list is empty.');
+        if (response.status === 404) {
+            console.warn('Episodes not found for this anime.');
+            break;
+        }
+        if (response.status >= 500) {
+            console.warn(`Jikan API Server Error (${response.status}) while fetching episodes.`);
+            break;
+        }
+        console.warn(`Failed to fetch episodes or episode list is empty (Status: ${response.status}).`);
         break;
     }
 
