@@ -238,7 +238,6 @@ export default function App() {
 
     // Call AI to enhance description and genres
     if (useAIEnhancement) {
-      setExportStatusText('Enhancing with AI...');
       try {
         const apiKeyToUse = geminiKey || process.env.GEMINI_API_KEY;
         if (!apiKeyToUse) {
@@ -246,55 +245,77 @@ export default function App() {
         }
 
         const ai = new GoogleGenAI({ apiKey: apiKeyToUse });
-        const promptText = `You are an expert otaku AI focusing on anime. 
-Here is basic info for the anime '${selectedAnime.title}':
-${selectedAnime.synopsis || "No description available."}
-Current Genres/Tags: ${finalGenres.join(", ")}
+        
+        // --- STEP 1: Enhance Description ---
+        setExportStatusText('Enhancing description...');
+        const descPromptText = `You are an expert anime AI. Here is info for '${selectedAnime.title}':
+Original synopsis: ${selectedAnime.synopsis || "No description available."}
+Please write a highly engaging and detailed expanded synopsis (2-3 paragraphs) based on your knowledge of this anime.
+Return ONLY a JSON object with this shape: { "description": "The detailed synopsis string..." }`;
 
-Please expand the description into a highly detailed and engaging anime synopsis (around 2-3 paragraphs) based on your deep otaku knowledge.
-Also, provide a list of 15 to 25 relevant anime genres, themes, tropes, and tags for this anime (e.g., Action, Shounen, Dark Fantasy, Mecha, Tsundere, Magic, etc.).
+        const descReqConfig: any = {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: { description: { type: Type.STRING } },
+            required: ["description"]
+          }
+        };
+        if (useGrounding) descReqConfig.tools = [{ googleSearch: {} }];
 
-Return ONLY a JSON object with these two fields:
-{
-  "description": "The detailed synopsis string...",
-  "genres": ["Action", "Sci-Fi", "Mecha", "etc..."]
-}`;
+        const descResponse = await ai.models.generateContent({
+          model: aiModel,
+          contents: descPromptText,
+          config: descReqConfig
+        });
+        
+        const descTextRes = descResponse.text;
+        if (descTextRes) {
+          try {
+            const aiData = JSON.parse(descTextRes);
+            if (aiData.description) {
+              finalDescription = aiData.description.trim() + "\n" + metaFooter;
+            }
+          } catch(e) {}
+        }
 
-        const reqConfig: any = {
+        // --- STEP 2: Enhance Genres ---
+        setExportStatusText('Enhancing genres...');
+        const genresPromptText = `You are an expert anime AI. Here is info for '${selectedAnime.title}':
+Current Genres: ${finalGenres.join(", ")}
+Please provide a list of 15-25 accurate anime genres, sub-genres, themes, and tropes for this anime.
+Return ONLY a JSON object with this shape: { "genres": ["string", "string"] }`;
+
+        const genresReqConfig: any = {
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.OBJECT,
             properties: {
-              description: { type: Type.STRING },
-              genres: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING }
-              }
+              genres: { type: Type.ARRAY, items: { type: Type.STRING } }
             },
-            required: ["description", "genres"]
+            required: ["genres"]
           }
         };
+        if (useGrounding) genresReqConfig.tools = [{ googleSearch: {} }];
 
-        if (useGrounding) {
-            reqConfig.tools = [{ googleSearch: {} }];
-        }
-
-        const response = await ai.models.generateContent({
+        const genresResponse = await ai.models.generateContent({
           model: aiModel,
-          contents: promptText,
-          config: reqConfig
+          contents: genresPromptText,
+          config: genresReqConfig
         });
-
-        const textRes = response.text;
-        if (textRes) {
-          const aiData = JSON.parse(textRes);
-          if (aiData.description) {
-            finalDescription = aiData.description.trim() + "\n" + metaFooter;
-          }
-          if (aiData.genres && Array.isArray(aiData.genres)) {
-            finalGenres = [...new Set([...finalGenres, ...aiData.genres])];
-          }
+        
+        const genresTextRes = genresResponse.text;
+        if (genresTextRes) {
+          try {
+            const aiData = JSON.parse(genresTextRes);
+            if (aiData.genres && Array.isArray(aiData.genres)) {
+              finalGenres = [...new Set([...finalGenres, ...aiData.genres])];
+            }
+          } catch(e) {}
         }
+        
+        setExportStatusText('Packaging data...');
+
       } catch (aiError: any) {
         console.error("AI enhancement failed:", aiError);
         const errMsg = `AI enhancement failed: ${aiError.message || "Unknown error."}\nFalling back to original data.`;
@@ -573,7 +594,7 @@ Return ONLY a JSON object with these two fields:
                 Manage your <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-purple-400">Local Source</span>
               </h1>
               <p className="max-w-2xl text-slate-600 dark:text-slate-400 text-lg">
-                Search the MyAnimeList database, generate perfectly formatted metadata, and export it directly for your Aniyomi application.
+                Search the MyAnimeList database, generate perfectly formatted metadata, and export it directly to Aniyomi.
               </p>
             </div>
 
@@ -637,7 +658,7 @@ Return ONLY a JSON object with these two fields:
             ) : recentAnime.length > 0 ? (
               <div className="space-y-6">
                  <div className="flex items-center gap-2 text-slate-600 dark:text-slate-400">
-                    <Clock className="w-5 h-5 text-indigo-400" />
+                    <Clock className="w-5 h-5 text-indigo-500 dark:text-indigo-400" />
                     <h2 className="text-xl font-bold text-slate-900 dark:text-white">Recently Viewed</h2>
                  </div>
                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6">
@@ -688,14 +709,14 @@ Return ONLY a JSON object with these two fields:
               <div className="animate-in fade-in duration-500">
                 {/* Hero Banner Background */}
                 <div className="w-full h-64 sm:h-80 relative overflow-hidden -mt-16">
-                  <div className="absolute inset-0 bg-white dark:bg-slate-900">
+                  <div className="absolute inset-0 bg-slate-50 dark:bg-slate-900">
                     <img 
                       src={selectedAnime.images?.webp?.large_image_url} 
                       alt=""
                       className="w-full h-full object-cover opacity-20 blur-xl scale-110"
                     />
                   </div>
-                  <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/80 to-transparent" />
+                  <div className="absolute inset-0 bg-gradient-to-t from-slate-50 dark:from-slate-950 via-slate-50/80 dark:via-slate-950/80 to-transparent" />
                 </div>
 
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative -mt-32 sm:-mt-48 pb-12">
@@ -703,7 +724,7 @@ Return ONLY a JSON object with these two fields:
                     
                     {/* Left Column (Poster) */}
                     <div className="w-48 sm:w-64 shrink-0 mx-auto sm:mx-0 relative z-10">
-                      <div className="w-full aspect-[2/3] rounded-xl overflow-hidden shadow-2xl ring-1 ring-slate-800">
+                      <div className="w-full aspect-[2/3] rounded-xl overflow-hidden shadow-2xl ring-1 ring-slate-200 dark:ring-slate-800">
                         <img 
                           src={selectedAnime.images?.webp?.large_image_url} 
                           alt={getDisplayTitle(selectedAnime)} 
@@ -713,10 +734,10 @@ Return ONLY a JSON object with these two fields:
                       
                       {/* Export Toolkit */}
                       <div className="mt-6 space-y-4">
-                        <div className="bg-indigo-900/20 border border-indigo-500/30 p-5 rounded-xl flex flex-col gap-4">
+                        <div className="bg-indigo-100 dark:bg-indigo-900/20 border border-indigo-300 dark:border-indigo-500/30 p-5 rounded-xl flex flex-col gap-4">
                           <div className="flex items-center justify-between">
-                            <h3 className="text-sm font-semibold text-indigo-100">Local Export Toolkit</h3>
-                            <span className="text-[10px] px-2 py-0.5 bg-indigo-500 text-slate-900 dark:text-white rounded-full font-bold">2.0</span>
+                            <h3 className="text-sm font-semibold text-indigo-900 dark:text-indigo-100">Local Export Toolkit</h3>
+                            <span className="text-[10px] px-2 py-0.5 bg-indigo-500 text-white rounded-full font-bold">2.0</span>
                           </div>
                           
                           {/* AI Enhancement Toggle */}
@@ -787,7 +808,7 @@ Return ONLY a JSON object with these two fields:
                                   <span className="text-[10px] text-slate-500 dark:text-slate-500">Recommended for Android & APKs</span>
                                 </div>
                               </div>
-                              {useAIEnhancement && <span className="text-[10px] bg-indigo-500/20 text-indigo-400 px-1.5 py-0.5 rounded font-bold tracking-wider">AI</span>}
+                              {useAIEnhancement && <span className="text-[10px] bg-indigo-500/20 text-indigo-700 dark:text-indigo-400 px-1.5 py-0.5 rounded font-bold tracking-wider">AI</span>}
                             </button>
 
                             <button 
@@ -812,10 +833,10 @@ Return ONLY a JSON object with these two fields:
                              Format Preview
                            </h4>
                            <div className="flex flex-col gap-1 text-xs font-mono text-slate-500 dark:text-slate-500">
-                             <span className="text-indigo-400">details.json</span>
+                             <span className="text-indigo-600 dark:text-indigo-400">details.json</span>
                              <span>- Title, Sysnopsis</span>
                              <span>- Genres, Status</span>
-                             <span className="text-indigo-400 mt-2">episodes.json</span>
+                             <span className="text-indigo-600 dark:text-indigo-400 mt-2">episodes.json</span>
                              <span>- EP Name, Number</span>
                              <span>- Date Upload, Scanlator</span>
                            </div>
@@ -842,7 +863,7 @@ Return ONLY a JSON object with these two fields:
                         )}
                         
                         <div className="flex flex-wrap gap-2 mb-6 mt-4">
-                          <span className="bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5">
+                          <span className="bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-500/20 px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5">
                             <Star className="w-3.5 h-3.5" />
                             {selectedAnime.score || 'unrated'}
                           </span>
@@ -872,7 +893,7 @@ Return ONLY a JSON object with these two fields:
                         <div className="flex-1 flex flex-col mb-8 h-96">
                           <div className="flex items-center justify-between mb-4">
                             <h2 className="text-lg font-semibold text-slate-900 dark:text-white flex items-center gap-2">
-                              <PlayCircle className="w-5 h-5 text-indigo-400" />
+                              <PlayCircle className="w-5 h-5 text-indigo-500 dark:text-indigo-400" />
                               Episodes Data
                             </h2>
                             <span className="text-xs text-slate-500 dark:text-slate-500 bg-white dark:bg-slate-900 px-2.5 py-1 rounded-full">{episodes.length} files</span>
@@ -884,7 +905,7 @@ Return ONLY a JSON object with these two fields:
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 overflow-y-auto pr-2 custom-scrollbar pb-8">
                               {episodes.map((ep, index) => (
                                 <div key={`${ep.mal_id}-${index}`} className="bg-white dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800/80 hover:border-slate-300 dark:hover:border-slate-700 p-3 rounded-lg flex items-center gap-3 transition-colors h-16">
-                                   <div className="text-sm font-bold text-indigo-400 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 shadow-inner py-1 w-12 text-center rounded shrink-0 font-mono">
+                                   <div className="text-sm font-bold text-indigo-600 dark:text-indigo-400 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 shadow-inner py-1 w-12 text-center rounded shrink-0 font-mono">
                                      <span className="text-[10px] text-slate-600 mr-0.5">EP</span>{ep.mal_id}
                                    </div>
                                    <div className="flex flex-col overflow-hidden justify-center h-full">
@@ -935,9 +956,27 @@ Return ONLY a JSON object with these two fields:
                     className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-md py-2 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-slate-800 dark:text-slate-200 placeholder:text-slate-600 transition-all font-mono"
                   />
                   <p className="text-xs text-slate-500 dark:text-slate-500 leading-relaxed">
-                    Required for the <strong className="text-indigo-400 font-semibold">AI Enhanced</strong> feature if deployed as a static APK or standalone app. You can get a free key from Google AI Studio. 
+                    Required for the <strong className="text-indigo-500 dark:text-indigo-400 font-semibold">AI Enhanced</strong> feature if deployed as a static APK or standalone app. You can get a free key from Google AI Studio. 
                   </p>
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  AI Model
+                </label>
+                <select 
+                  value={aiModel} 
+                  onChange={e => setAiModel(e.target.value)}
+                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-md py-2 px-3 text-sm text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                >
+                  <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (Recommended)</option>
+                  <option value="gemini-3.1-flash-preview">Gemini 3.1 Flash</option>
+                  <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+                  <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                  <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+                  <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
+                </select>
               </div>
 
               <div>
@@ -946,7 +985,7 @@ Return ONLY a JSON object with these two fields:
                 </label>
                 <div className="flex flex-col gap-2">
                   {Capacitor.isNativePlatform() ? (
-                    <div className="bg-emerald-900/20 border border-emerald-500/30 rounded-md p-3">
+                    <div className="bg-emerald-100 dark:bg-emerald-900/20 border border-emerald-300 dark:border-emerald-500/30 rounded-md p-3">
                       <p className="text-xs text-emerald-800 dark:text-emerald-200 leading-relaxed text-center font-medium">
                         Running natively on Android. Exporting will automatically save to <strong className="text-emerald-400">/sdcard/Aniyomi/local</strong> using the Android OS file system.
                       </p>
@@ -983,7 +1022,7 @@ Return ONLY a JSON object with these two fields:
                       )}
                     </div>
                   ) : (
-                    <div className="bg-amber-900/20 border border-amber-500/30 rounded-md p-3">
+                    <div className="bg-amber-100 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-500/30 rounded-md p-3">
                       <p className="text-xs text-amber-800 dark:text-amber-200 leading-relaxed text-center font-medium">
                         Direct folder access is not supported on Android/WebView. You must use the "Export as ZIP" feature instead.
                       </p>
