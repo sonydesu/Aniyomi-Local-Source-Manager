@@ -5,7 +5,7 @@ const JIKAN_BASE_URL = 'https://api.jikan.moe/v4';
 // Helper to handle rate limiting by waiting between requests
 const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
 
-export async function searchAnime(query: string, page: number = 1): Promise<ApiResponse<Anime[]>> {
+export async function searchAnime(query: string, page: number = 1): Promise<Anime[]> {
   const url = new URL(`${JIKAN_BASE_URL}/anime`);
   url.searchParams.append('q', query);
   url.searchParams.append('page', page.toString());
@@ -20,7 +20,8 @@ export async function searchAnime(query: string, page: number = 1): Promise<ApiR
     throw new Error('Failed to search anime.');
   }
 
-  return response.json();
+  const result: ApiResponse<Anime[]> = await response.json();
+  return result.data || [];
 }
 
 export async function getAnimeDetails(id: number): Promise<Anime> {

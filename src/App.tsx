@@ -1,15 +1,18 @@
 import { useEffect, useState } from 'react';
-import { ArrowLeft, Search, Download, Star, Tv, Calendar, Info, PlayCircle, Loader2, Settings, X, Wand2, Archive, FolderDown, FolderCheck } from 'lucide-react';
+import { ArrowLeft, Search, Download, Star, Tv, Calendar, Info, PlayCircle, Loader2, Settings, X, Wand2, Archive, FolderDown, FolderCheck, Clock } from 'lucide-react';
 import { GoogleGenAI, Type } from '@google/genai';
 import JSZip from 'jszip';
 import { searchAnime, getAnimeDetails, getAnimeEpisodes } from './api';
 import { Anime, Episode } from './types';
 import { saveDirHandle, getDirHandle, verifyPermission } from './db';
+import { Capacitor } from '@capacitor/core';
+import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
+import { Dialog } from '@capacitor/dialog';
 
 export default function App() {
   const [query, setQuery] = useState('');
-  const [isSearching, setIsSearching] = useState(false);
   const [results, setResults] = useState<Anime[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [errorHeader, setErrorHeader] = useState('');
 
@@ -19,6 +22,10 @@ export default function App() {
   const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
   const [dirHandle, setDirHandle] = useState<any>(null);
   const hasFSAPI = 'showDirectoryPicker' in window;
+  
+  // Recent Anime History
+  const [recentAnime, setRecentAnime] = useState<Anime[]>([]);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (hasFSAPI) {
@@ -26,11 +33,31 @@ export default function App() {
         if (handle) setDirHandle(handle);
       }).catch(console.error);
     }
+    const savedRecent = localStorage.getItem('recent_anime');
+    if (savedRecent) {
+      try {
+        setRecentAnime(JSON.parse(savedRecent));
+      } catch (e) {}
+    }
   }, []);
 
   const saveSettings = () => {
     localStorage.setItem('gemini_api_key', geminiKey);
     setShowSettings(false);
+  };
+  
+  const showToast = (message: string) => {
+    setToastMessage(message);
+    setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  const saveRecentAnime = (anime: Anime) => {
+    setRecentAnime(prev => {
+      const filtered = prev.filter(a => a.mal_id !== anime.mal_id);
+      const updated = [anime, ...filtered].slice(0, 10);
+      localStorage.setItem('recent_anime', JSON.stringify(updated));
+      return updated;
+    });
   };
 
   const pickDirectory = async () => {
@@ -39,9 +66,17 @@ export default function App() {
       const handle = await (window as any).showDirectoryPicker({ mode: 'readwrite' });
       await saveDirHandle(handle);
       setDirHandle(handle);
-      alert('Directory selected and saved successfully!');
+      showToast('Directory selected and saved successfully!');
     } catch (err: any) {
-      if (err.name !== 'AbortError') console.error('Failed to pick directory:', err);
+      if (err.name !== 'AbortError') {
+        console.error('Failed to pick directory:', err);
+        const msg = err.message || '';
+        if (msg.toLowerCase().includes('cross origin') || msg.toLowerCase().includes('sub frame')) {
+          alert('Folder selection is not allowed in this preview. Please open the app in a new tab to use this feature.');
+        } else {
+          alert(`Failed to pick directory: ${msg}`);
+        }
+      }
     }
   };
 
@@ -59,48 +94,62 @@ export default function App() {
 
   // Debounced Search
   useEffect(() => {
-    const timer = setTimeout(() => {
-      if (query.trim() !== '') {
-        performSearch(query);
-      } else {
+    const delayDebounceFn = setTimeout(() => {
+      if (query.trim() === '') {
         setResults([]);
+        return;
       }
-    }, 500);
 
-    return () => clearTimeout(timer);
+      const fetchSearchResults = async () => {
+        setIsLoading(true);
+        setErrorHeader('');
+        try {
+          const data = await searchAnime(query);
+          setResults(data);
+        } catch (err) {
+          console.error(err);
+          setErrorHeader('Failed to search anime. Rate limit or network issue.');
+        } finally {
+          setIsLoading(false);
+        }
+      };
+
+      fetchSearchResults();
+    }, 600); // 600ms debounce
+
+    return () => clearTimeout(delayDebounceFn);
   }, [query]);
-
-  const performSearch = async (q: string) => {
-    setIsSearching(true);
-    setErrorHeader('');
-    try {
-      const data = await searchAnime(q);
-      setResults(data.data || []);
-    } catch (err: any) {
-      setErrorHeader(err.message || 'Error fetching anime list');
-    } finally {
-      setIsSearching(false);
-    }
-  };
 
   const openDetails = async (id: number) => {
     setSelectedId(id);
     setIsLoadingDetails(true);
+    setSelectedAnime(null);
+    setEpisodes([]);
     setErrorHeader('');
+
     try {
       const anime = await getAnimeDetails(id);
       setSelectedAnime(anime);
       
       const epList = await getAnimeEpisodes(id);
       setEpisodes(epList);
+      
+      saveRecentAnime(anime);
     } catch (err: any) {
-      setErrorHeader(err.message || 'Error fetching details');
+      console.error(err);
+      setErrorHeader('Failed to fetch details. Rate limit or network issue.');
+      const msg = err.message || 'Failed to fetch anime details. Please check your network connection or try again later.';
+      if (Capacitor.isNativePlatform()) {
+        Dialog.alert({ title: 'Error', message: msg });
+      } else {
+        alert(msg);
+      }
     } finally {
       setIsLoadingDetails(false);
     }
   };
 
-  const closeDetails = () => {
+  const goBack = () => {
     setSelectedId(null);
     setSelectedAnime(null);
     setEpisodes([]);
@@ -183,7 +232,7 @@ Return ONLY a JSON object with these two fields:
 }`;
 
         const response = await ai.models.generateContent({
-          model: "gemini-1.5-flash",
+          model: "gemini-2.5-flash",
           contents: promptText,
           config: {
             responseMimeType: "application/json",
@@ -213,7 +262,12 @@ Return ONLY a JSON object with these two fields:
         }
       } catch (aiError: any) {
         console.error("AI enhancement failed:", aiError);
-        alert(`AI enhancement failed: ${aiError.message || "Unknown error."}\nFalling back to original data.`);
+        const errMsg = `AI enhancement failed: ${aiError.message || "Unknown error."}\nFalling back to original data.`;
+        if (Capacitor.isNativePlatform()) {
+          await Dialog.alert({ title: 'AI Error', message: errMsg });
+        } else {
+          alert(errMsg);
+        }
       }
     }
 
@@ -287,8 +341,15 @@ Return ONLY a JSON object with these two fields:
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
+        
+        showToast(`Successfully downloaded ${folderName}.zip!`);
      } catch (err: any) {
-        alert('Export failed: ' + err.message);
+        const msg = 'Export failed: ' + err.message;
+        if (Capacitor.isNativePlatform()) {
+           await Dialog.alert({ title: 'Export Failed', message: msg });
+        } else {
+           alert(msg);
+        }
      } finally {
         setIsExporting(false);
      }
@@ -296,78 +357,121 @@ Return ONLY a JSON object with these two fields:
 
   const handleExportDirect = async () => {
     if (!selectedAnime) return;
-    if (!hasFSAPI) {
-       alert('Direct folder access is not supported on this browser (this is common on Android and mobile wrappers). Please use the "Export as ZIP" option instead to download and extract into your Aniyomi folder.');
-       return;
-    }
     
     setIsExporting(true);
+
     try {
-       let targetDirHandle = dirHandle;
-       
-       if (!targetDirHandle) {
-           targetDirHandle = await (window as any).showDirectoryPicker({
-               mode: 'readwrite'
+      const folderName = selectedAnime.title.replace(/[\/\\?%*:|"<>]/g, '-');
+      const detailsJson = await getDetailsData();
+      const episodesJson = await getEpisodesData();
+  
+      // === NATIVE ANDROID/APK EXPORT ===
+      if (Capacitor.isNativePlatform()) {
+        const basePath = `Aniyomi/local/${folderName}`;
+        
+        if (detailsJson) {
+           await Filesystem.writeFile({
+             path: `${basePath}/details.json`,
+             data: detailsJson,
+             directory: Directory.ExternalStorage,
+             encoding: Encoding.UTF8,
+             recursive: true
            });
-           await saveDirHandle(targetDirHandle);
-           setDirHandle(targetDirHandle);
-       } else {
-           const hasPermission = await verifyPermission(targetDirHandle, true);
-           if (!hasPermission) {
-               throw new Error("Permission to access the saved folder was denied.");
-           }
-       }
-
-       const folderName = selectedAnime.title.replace(/[\/\\?%*:|"<>]/g, '-');
-       const animeFolderHandle = await targetDirHandle.getDirectoryHandle(folderName, { create: true });
-
-       const detailsJson = await getDetailsData();
-       const episodesJson = await getEpisodesData();
-
-       if (detailsJson) {
-           const detailsFileHandle = await animeFolderHandle.getFileHandle('details.json', { create: true });
-           const detailsWritable = await detailsFileHandle.createWritable();
-           await detailsWritable.write(detailsJson);
-           await detailsWritable.close();
-       }
-
-       if (episodesJson) {
-           const episodesFileHandle = await animeFolderHandle.getFileHandle('episodes.json', { create: true });
-           const episodesWritable = await episodesFileHandle.createWritable();
-           await episodesWritable.write(episodesJson);
-           await episodesWritable.close();
-       }
-
-       alert(`Successfully created folder "${folderName}" and saved details.json & episodes.json!`);
-
+        }
+        
+        if (episodesJson) {
+           await Filesystem.writeFile({
+             path: `${basePath}/episodes.json`,
+             data: episodesJson,
+             directory: Directory.ExternalStorage,
+             encoding: Encoding.UTF8,
+             recursive: true
+           });
+        }
+        
+        showToast(`Saved natively to Android storage: /sdcard/${basePath}`);
+        setIsExporting(false);
+        return;
+      }
+  
+      // === WEB BROWSER EXPORT ===
+      if (!hasFSAPI) {
+         alert('Direct folder access is not supported on this browser (this is common on Android and mobile wrappers). Please use the "Export as ZIP" option instead to download and extract into your Aniyomi folder.');
+         setIsExporting(false);
+         return;
+      }
+      
+      let targetDirHandle = dirHandle;
+      
+      if (!targetDirHandle) {
+          try {
+              targetDirHandle = await (window as any).showDirectoryPicker({
+                  mode: 'readwrite'
+              });
+          } catch (pickerErr: any) {
+              const msg = pickerErr.message || '';
+              if (msg.toLowerCase().includes('cross origin') || msg.toLowerCase().includes('sub frame')) {
+                  throw new Error("Folder selection is not allowed in this preview. Please open the app in a new tab, or use 'Export as ZIP'.");
+              }
+              throw pickerErr;
+          }
+          await saveDirHandle(targetDirHandle);
+          setDirHandle(targetDirHandle);
+      } else {
+          const hasPermission = await verifyPermission(targetDirHandle, true);
+          if (!hasPermission) {
+              throw new Error("Permission to access the saved folder was denied.");
+          }
+      }
+  
+      const animeFolderHandle = await targetDirHandle.getDirectoryHandle(folderName, { create: true });
+  
+      if (detailsJson) {
+          const detailsFileHandle = await animeFolderHandle.getFileHandle('details.json', { create: true });
+          const detailsWritable = await detailsFileHandle.createWritable();
+          await detailsWritable.write(detailsJson);
+          await detailsWritable.close();
+      }
+  
+      if (episodesJson) {
+          const episodesFileHandle = await animeFolderHandle.getFileHandle('episodes.json', { create: true });
+          const episodesWritable = await episodesFileHandle.createWritable();
+          await episodesWritable.write(episodesJson);
+          await episodesWritable.close();
+      }
+  
+      showToast(`Successfully created folder "${folderName}" and saved details & episodes!`);
     } catch (err: any) {
-       if (err.name !== 'AbortError') {
-           alert('Export failed: ' + err.message);
-       }
+        if (err.name !== 'AbortError') {
+            const msg = 'Export failed: ' + err.message;
+            if (Capacitor.isNativePlatform()) {
+              await Dialog.alert({ title: 'Export Failed', message: err.message || 'Please ensure the app has Storage permissions.' });
+            } else {
+              alert(msg);
+            }
+        }
     } finally {
-       setIsExporting(false);
+        setIsExporting(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-200 font-sans flex flex-col">
-      {/* Header */}
-      <header className="sticky top-0 z-10 bg-slate-900/50 border-b border-slate-800 shadow-sm backdrop-blur-md">
-        <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between gap-4">
+    <div className="min-h-screen bg-slate-950 text-slate-200 selection:bg-indigo-500/30 selection:text-indigo-200 font-sans">
+      <header className="sticky top-0 z-40 w-full backdrop-blur-xl bg-slate-950/80 border-b border-slate-800">
+        <div className="flex items-center h-16 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center gap-3">
-            {selectedId ? (
+            {selectedId && (
               <button 
-                onClick={closeDetails} 
-                className="p-2 -ml-2 rounded-full text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                onClick={goBack}
+                className="p-2 -ml-2 rounded-full hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
                 aria-label="Go back"
               >
                 <ArrowLeft className="w-5 h-5" />
               </button>
-            ) : (
-              <div className="w-8 h-8 bg-indigo-600 rounded flex items-center justify-center font-bold text-white shrink-0">
-                A
-              </div>
             )}
+            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+              <span className="text-white font-bold text-lg leading-none select-none">A</span>
+            </div>
             <span className="text-lg font-semibold tracking-tight hidden sm:block">Aniyomi <span className="text-slate-500 font-normal">LocalSource Manager</span></span>
             <span className="text-lg font-semibold tracking-tight sm:hidden">Aniyomi</span>
           </div>
@@ -400,7 +504,7 @@ Return ONLY a JSON object with these two fields:
                 <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
                 <input
                   type="text"
-                  placeholder="Search anime for local export..."
+                  placeholder="Search Jikan API..."
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   className="w-full bg-slate-800 border border-slate-700 rounded-md py-1.5 pl-10 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-slate-200 placeholder:text-slate-500 transition-all"
@@ -411,226 +515,305 @@ Return ONLY a JSON object with these two fields:
         </div>
       </header>
 
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto p-6 sm:p-8 w-full flex-1 flex flex-col">
-        {errorHeader && (
-          <div className="bg-red-900/20 text-red-400 p-4 rounded-lg mb-6 border border-red-900/50 flex items-start gap-3">
-            <Info className="w-5 h-5 shrink-0 mt-0.5" />
-            <p className="text-sm">{errorHeader}</p>
-          </div>
-        )}
+      {errorHeader && (
+        <div className="bg-red-500/10 border-b border-red-500/20 text-red-400 text-sm py-2 px-4 text-center">
+          {errorHeader}
+        </div>
+      )}
 
+      <main className="min-h-[calc(100vh-4rem)]">
         {!selectedId ? (
-           // Search Grid View
-          <div className="space-y-6 flex-1">
-            {!query && !results.length && !isSearching && (
-              <div className="flex flex-col items-center justify-center py-32 text-slate-500 space-y-4">
-                <Search className="w-12 h-12 opacity-30 text-slate-400" />
-                <p className="text-sm font-medium tracking-wide">Search for anime to build your library.</p>
-              </div>
-            )}
-            
-            {isSearching && results.length === 0 && (
-               <div className="flex flex-col items-center justify-center py-32 text-slate-500 space-y-4">
-                 <Loader2 className="w-10 h-10 animate-spin text-indigo-500" />
-                 <p className="text-sm">Searching the database...</p>
-               </div>
-            )}
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="flex flex-col items-center text-center py-12 mb-8">
+              <h1 className="text-4xl sm:text-5xl font-bold tracking-tight text-white mb-4">
+                Manage your <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-purple-400">Local Source</span>
+              </h1>
+              <p className="max-w-2xl text-slate-400 text-lg">
+                Search the MyAnimeList database, generate perfectly formatted metadata, and export it directly for your Aniyomi application.
+              </p>
+            </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6">
-              {results.map((anime, index) => (
-                <div 
-                  key={`${anime.mal_id}-${index}`}
-                  onClick={() => openDetails(anime.mal_id)}
-                  className="group cursor-pointer flex flex-col gap-3 relative transition-all duration-300"
-                >
-                  <div className="aspect-[2/3] relative rounded-lg overflow-hidden bg-slate-800 shadow-xl border border-slate-700/50">
-                    <img 
-                      src={anime.images.webp.large_image_url} 
-                      alt={anime.title} 
-                      className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-                      loading="lazy"
-                    />
-                    <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
-                    
-                    {anime.score && (
-                      <div className="absolute top-2 right-2 bg-slate-900/80 backdrop-blur-md px-2 py-1 flex items-center gap-1 rounded text-xs font-bold text-white border border-slate-700">
-                        <Star className="w-3 h-3 text-indigo-400 fill-indigo-400" />
-                        {anime.score}
+            {/* Search Results */}
+            {isLoading ? (
+              <div className="flex justify-center items-center py-20">
+                <Loader2 className="w-8 h-8 text-indigo-500 animate-spin" />
+              </div>
+            ) : results.length > 0 ? (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6">
+                {results.map((anime, index) => (
+                  <div 
+                    key={`${anime.mal_id}-${index}`}
+                    onClick={() => openDetails(anime.mal_id)}
+                    className="group cursor-pointer flex flex-col gap-3 relative transition-all duration-300"
+                  >
+                    <div className="relative aspect-[2/3] w-full overflow-hidden rounded-xl bg-slate-800 border border-slate-700 shadow-sm group-hover:shadow-indigo-500/20 group-hover:border-indigo-500/50 transition-all duration-300">
+                      {anime.images?.webp?.large_image_url ? (
+                        <img 
+                          src={anime.images.webp.large_image_url} 
+                          alt={getDisplayTitle(anime)} 
+                          className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-slate-600">No Image</div>
+                      )}
+                      
+                      <div className="absolute top-2 right-2 bg-slate-900/80 backdrop-blur-md px-2 py-1 rounded-md flex items-center gap-1.5 text-xs font-semibold border border-slate-700 shadow-sm">
+                        <Star className="w-3 h-3 text-amber-400 fill-amber-400" />
+                        <span>{anime.score || 'N/A'}</span>
                       </div>
-                    )}
-                  </div>
-                  <div>
-                    <h3 className="font-medium text-sm leading-tight text-slate-300 group-hover:text-indigo-400 transition-colors line-clamp-2" title={getDisplayTitle(anime)}>
-                      {getDisplayTitle(anime)}
-                    </h3>
-                    <div className="text-xs text-slate-500 mt-1 flex items-center gap-2 truncate">
-                      {anime.type} • {anime.episodes ? `${anime.episodes} Ep` : 'Ongoing'}
+                      
+                      <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-900/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-end p-4">
+                        <span className="w-full text-center bg-indigo-500 text-white text-xs font-bold py-1.5 rounded opacity-0 group-hover:opacity-100 transform translate-y-2 group-hover:translate-y-0 transition-all duration-300">
+                          View Details
+                        </span>
+                      </div>
+                    </div>
+                    <div>
+                      <h3 className="font-medium text-sm leading-tight text-slate-300 group-hover:text-indigo-400 transition-colors line-clamp-2" title={getDisplayTitle(anime)}>
+                        {getDisplayTitle(anime)}
+                      </h3>
+                      <div className="text-xs text-slate-500 mt-1 flex items-center gap-2 truncate">
+                        {anime.type} • {anime.episodes ? `${anime.episodes} Ep` : 'Ongoing'}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            ) : query.trim() !== '' ? (
+              <div className="text-center py-20 text-slate-500">
+                No results found for "{query}".
+              </div>
+            ) : recentAnime.length > 0 ? (
+              <div className="space-y-6">
+                 <div className="flex items-center gap-2 text-slate-400">
+                    <Clock className="w-5 h-5 text-indigo-400" />
+                    <h2 className="text-xl font-bold text-white">Recently Viewed</h2>
+                 </div>
+                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6">
+                   {recentAnime.map((anime, index) => (
+                    <div 
+                      key={`${anime.mal_id}-recent-${index}`}
+                      onClick={() => openDetails(anime.mal_id)}
+                      className="group cursor-pointer flex flex-col gap-3 relative transition-all duration-300"
+                    >
+                      <div className="relative aspect-[2/3] w-full overflow-hidden rounded-xl bg-slate-800 border border-slate-700 shadow-sm group-hover:shadow-indigo-500/20 group-hover:border-indigo-500/50 transition-all duration-300">
+                        {anime.images?.webp?.large_image_url ? (
+                          <img 
+                            src={anime.images.webp.large_image_url} 
+                            alt={getDisplayTitle(anime)} 
+                            className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                            loading="lazy"
+                          />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-slate-600">No Image</div>
+                        )}
+                        
+                        <div className="absolute top-2 right-2 bg-slate-900/80 backdrop-blur-md px-2 py-1 rounded-md flex items-center gap-1.5 text-xs font-semibold border border-slate-700 shadow-sm">
+                          <Star className="w-3 h-3 text-amber-400 fill-amber-400" />
+                          <span>{anime.score || 'N/A'}</span>
+                        </div>
+                      </div>
+                      <div>
+                        <h3 className="font-medium text-sm leading-tight text-slate-300 group-hover:text-indigo-400 transition-colors line-clamp-2" title={getDisplayTitle(anime)}>
+                          {getDisplayTitle(anime)}
+                        </h3>
+                      </div>
+                    </div>
+                  ))}
+                 </div>
+              </div>
+            ) : null}
           </div>
         ) : (
            // Details View
           <>
             {isLoadingDetails || !selectedAnime ? (
               <div className="flex flex-col items-center justify-center py-32 space-y-4">
-                 <Loader2 className="w-12 h-12 animate-spin text-indigo-500" />
-                 <p className="text-slate-400 text-sm">Loading metadata...</p>
+                <Loader2 className="w-10 h-10 text-indigo-500 animate-spin" />
+                <p className="text-slate-400 animate-pulse">Fetching complete details from Jikan API...</p>
               </div>
             ) : (
-              <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 flex-1">
-                <div className="flex flex-col md:flex-row gap-8 lg:gap-12">
-                  {/* Left Column: Cover & Primary Actions */}
-                  <div className="md:w-64 flex-shrink-0 flex flex-col gap-6">
-                    <div className="aspect-[2/3] w-full bg-slate-800 rounded-lg shadow-2xl flex-shrink-0 border border-slate-700 p-1 relative overflow-hidden">
-                       <img 
-                          src={selectedAnime.images.webp.large_image_url} 
-                          alt={selectedAnime.title}
-                          className="w-full h-full object-cover rounded-md"
-                        />
-                    </div>
-                    
-                    <div className="bg-indigo-900/20 border border-indigo-500/30 p-5 rounded-xl flex flex-col gap-4">
-                      <div className="flex items-center justify-between">
-                        <h3 className="text-sm font-semibold text-indigo-100">Local Export Toolkit</h3>
-                        <span className="text-[10px] px-2 py-0.5 bg-indigo-500 text-white rounded-full font-bold">2.0</span>
-                      </div>
-                      
-                      {/* AI Enhancement Toggle */}
-                      <div className="flex items-center justify-between bg-slate-950/50 p-2.5 rounded-lg border border-slate-800">
-                        <div className={`flex items-center gap-2 text-sm transition-colors ${useAIEnhancement ? 'text-indigo-300' : 'text-slate-400'}`}>
-                          <Wand2 className="w-4 h-4" />
-                          <span className="font-medium">AI Enhanced</span>
-                        </div>
-                        <button 
-                          type="button"
-                          role="switch"
-                          aria-checked={useAIEnhancement}
-                          onClick={() => setUseAIEnhancement(!useAIEnhancement)}
-                          className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-slate-900 ${useAIEnhancement ? 'bg-indigo-500' : 'bg-slate-700'}`}
-                        >
-                          <span aria-hidden="true" className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${useAIEnhancement ? 'translate-x-2' : '-translate-x-2'}`} />
-                        </button>
-                      </div>
-
-                      <div className="flex flex-col gap-2">
-                        <button 
-                          onClick={handleExportZip}
-                          disabled={isExporting}
-                          className="w-full flex items-center justify-between gap-3 bg-slate-900 hover:bg-slate-800 border border-slate-700 p-3 rounded-lg transition-all disabled:opacity-50"
-                        >
-                          <div className="flex items-center gap-3">
-                            {isExporting ? (
-                              <Loader2 className={`w-4 h-4 shrink-0 animate-spin ${useAIEnhancement ? 'text-indigo-400' : 'text-slate-400'}`} />
-                            ) : (
-                              <Archive className={`w-4 h-4 shrink-0 ${useAIEnhancement ? 'text-indigo-400' : 'text-slate-400'}`} />
-                            )}
-                            <div className="flex flex-col text-left">
-                              <span className="text-xs font-semibold text-slate-200">Export as ZIP package</span>
-                              <span className="text-[10px] text-slate-500">Recommended for Android & APKs</span>
-                            </div>
-                          </div>
-                          {useAIEnhancement && <span className="text-[10px] bg-indigo-500/20 text-indigo-400 px-1.5 py-0.5 rounded font-bold tracking-wider">AI</span>}
-                        </button>
-                        
-                        <button 
-                          onClick={handleExportDirect}
-                          disabled={isExporting}
-                          className="w-full flex items-center justify-between gap-3 bg-slate-950 hover:bg-slate-900 border border-slate-800 p-3 rounded-lg transition-all disabled:opacity-50 mt-2"
-                        >
-                           <div className="flex items-center gap-3">
-                            {isExporting ? <Loader2 className="w-4 h-4 text-slate-500 shrink-0 animate-spin" /> : <FolderDown className="w-4 h-4 text-slate-500 shrink-0" />}
-                            <div className="flex flex-col text-left">
-                              <span className="text-xs font-semibold text-slate-400">Save to Local Folder directly</span>
-                              <span className="text-[10px] text-slate-600">Requires Desktop Browser support</span>
-                            </div>
-                          </div>
-                        </button>
-                      </div>
-                    </div>
+              <div className="animate-in fade-in duration-500">
+                {/* Hero Banner Background */}
+                <div className="w-full h-64 sm:h-80 relative overflow-hidden -mt-16">
+                  <div className="absolute inset-0 bg-slate-900">
+                    <img 
+                      src={selectedAnime.images?.webp?.large_image_url} 
+                      alt=""
+                      className="w-full h-full object-cover opacity-20 blur-xl scale-110"
+                    />
                   </div>
+                  <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/80 to-transparent" />
+                </div>
 
-                  {/* Right Column: Info & Episodes */}
-                  <div className="flex-1 flex flex-col">
-                    <div>
-                      <h1 className="text-4xl font-bold text-white mb-2 leading-tight">
-                        {getDisplayTitle(selectedAnime)}
-                      </h1>
-                      {(selectedAnime.title_english || selectedAnime.title_japanese) && (
-                        <h3 className="text-lg text-slate-500 font-medium mb-4 flex flex-wrap items-center gap-2">
-                          {titleLanguage === 'english' ? selectedAnime.title : selectedAnime.title_english} 
-                          {selectedAnime.title_japanese && (
-                            <>
-                              <span className="text-slate-700 mx-1">•</span> 
-                              <span className="text-slate-400 font-serif">{selectedAnime.title_japanese}</span>
-                            </>
-                          )}
-                        </h3>
-                      )}
-                      
-                      <div className="flex flex-wrap gap-2 mb-6 mt-4">
-                        {[...(selectedAnime.genres || []), ...(selectedAnime.explicit_genres || []), ...(selectedAnime.themes || []), ...(selectedAnime.demographics || [])].slice(0, 15).map((g, i) => (
-                          <span key={`${g.mal_id}-${i}`} className="px-2 py-1 bg-slate-800 border border-slate-700 rounded text-xs font-semibold text-slate-300 uppercase tracking-wider">
-                            {g.name}
-                          </span>
-                        ))}
-                      </div>
-
-                      <p className="text-slate-400 text-sm leading-relaxed max-w-3xl mb-8">
-                        {selectedAnime.synopsis || "No synopsis available."}
-                      </p>
-
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
-                        <div className="p-3 bg-slate-900/50 border border-slate-800 rounded-md">
-                          <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Status</p>
-                          <p className="text-sm text-slate-200">{selectedAnime.status}</p>
-                        </div>
-                        <div className="p-3 bg-slate-900/50 border border-slate-800 rounded-md">
-                          <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Format</p>
-                          <p className="text-sm text-slate-200">{selectedAnime.type}</p>
-                        </div>
-                        <div className="p-3 bg-slate-900/50 border border-slate-800 rounded-md">
-                          <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Episodes</p>
-                          <p className="text-sm text-slate-200">{selectedAnime.episodes || 'TBA'}</p>
-                        </div>
-                        <div className="p-3 bg-slate-900/50 border border-slate-800 rounded-md">
-                          <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Score</p>
-                          <p className="text-sm text-slate-200 flex items-center gap-1">
-                            <Star className="w-3 h-3 text-indigo-400 fill-indigo-400" />
-                            {selectedAnime.score || 'N/A'}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative -mt-32 sm:-mt-48 pb-12">
+                  <div className="flex flex-col sm:flex-row gap-6 sm:gap-10">
                     
-                    <div className="pt-8 border-t border-slate-800 flex-1 flex flex-col min-h-0">
-                      <div className="flex items-center justify-between mb-4 shrink-0">
-                        <h3 className="text-lg font-bold text-slate-200">Episode Index <span className="text-slate-500 text-sm font-normal ml-2">({episodes.length})</span></h3>
+                    {/* Left Column (Poster) */}
+                    <div className="w-48 sm:w-64 shrink-0 mx-auto sm:mx-0 relative z-10">
+                      <div className="w-full aspect-[2/3] rounded-xl overflow-hidden shadow-2xl ring-1 ring-slate-800">
+                        <img 
+                          src={selectedAnime.images?.webp?.large_image_url} 
+                          alt={getDisplayTitle(selectedAnime)} 
+                          className="w-full h-full object-cover"
+                        />
                       </div>
                       
-                      {episodes.length === 0 ? (
-                        <p className="text-slate-500 italic bg-slate-900/50 border border-slate-800 p-4 rounded-lg text-sm">No episode data available for this anime.</p>
-                      ) : (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 overflow-y-auto pr-2 custom-scrollbar pb-8">
-                          {episodes.map((ep, index) => (
-                            <div key={`${ep.mal_id}-${index}`} className="bg-slate-900/50 border border-slate-800 hover:bg-slate-800/80 hover:border-slate-700 p-3 rounded-lg flex items-center gap-3 transition-colors h-16">
-                               <div className="text-sm font-bold text-indigo-400 bg-slate-950 border border-slate-800 shadow-inner py-1 w-12 text-center rounded shrink-0 font-mono">
-                                 <span className="text-[10px] text-slate-600 mr-0.5">EP</span>{ep.mal_id}
-                               </div>
-                               <div className="flex flex-col overflow-hidden justify-center h-full">
-                                 <span className="font-medium text-sm text-slate-300 truncate leading-tight" title={ep.title}>{ep.title}</span>
-                                 <span className="text-[11px] text-slate-500 mt-0.5 tracking-wide uppercase truncate">
-                                   {ep.aired ? new Date(ep.aired).toLocaleDateString(undefined, {month: 'short', day: 'numeric', year: 'numeric'}) : 'TBA'} {ep.filler && '• FLR'} {ep.recap && '• RCP'}
-                                 </span>
-                               </div>
+                      {/* Export Toolkit */}
+                      <div className="mt-6 space-y-4">
+                        <div className="bg-indigo-900/20 border border-indigo-500/30 p-5 rounded-xl flex flex-col gap-4">
+                          <div className="flex items-center justify-between">
+                            <h3 className="text-sm font-semibold text-indigo-100">Local Export Toolkit</h3>
+                            <span className="text-[10px] px-2 py-0.5 bg-indigo-500 text-white rounded-full font-bold">2.0</span>
+                          </div>
+                          
+                          {/* AI Enhancement Toggle */}
+                          <div className="flex items-center justify-between bg-slate-950/50 p-2.5 rounded-lg border border-slate-800">
+                            <div className={`flex items-center gap-2 text-sm transition-colors ${useAIEnhancement ? 'text-indigo-300' : 'text-slate-400'}`}>
+                              <Wand2 className="w-4 h-4" />
+                              <span className="font-medium">AI Enhanced</span>
                             </div>
-                          ))}
+                            <button 
+                              type="button"
+                              role="switch"
+                              aria-checked={useAIEnhancement}
+                              onClick={() => setUseAIEnhancement(!useAIEnhancement)}
+                              className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-slate-900 ${useAIEnhancement ? 'bg-indigo-500' : 'bg-slate-700'}`}
+                            >
+                              <span aria-hidden="true" className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${useAIEnhancement ? 'translate-x-2' : '-translate-x-2'}`} />
+                            </button>
+                          </div>
+
+                          <div className="flex flex-col gap-2">
+                            <button 
+                              onClick={handleExportZip}
+                              disabled={isExporting}
+                              className="w-full flex items-center justify-between gap-3 bg-slate-900 hover:bg-slate-800 border border-slate-700 p-3 rounded-lg transition-all disabled:opacity-50"
+                            >
+                              <div className="flex items-center gap-3">
+                                {isExporting ? (
+                                  <Loader2 className={`w-4 h-4 shrink-0 animate-spin ${useAIEnhancement ? 'text-indigo-400' : 'text-slate-400'}`} />
+                                ) : (
+                                  <Archive className={`w-4 h-4 shrink-0 ${useAIEnhancement ? 'text-indigo-400' : 'text-slate-400'}`} />
+                                )}
+                                <div className="flex flex-col text-left">
+                                  <span className="text-xs font-semibold text-slate-200">Export as ZIP package</span>
+                                  <span className="text-[10px] text-slate-500">Recommended for Android & APKs</span>
+                                </div>
+                              </div>
+                              {useAIEnhancement && <span className="text-[10px] bg-indigo-500/20 text-indigo-400 px-1.5 py-0.5 rounded font-bold tracking-wider">AI</span>}
+                            </button>
+
+                            <button 
+                              onClick={handleExportDirect}
+                              disabled={isExporting}
+                              className="w-full flex items-center justify-between gap-3 bg-slate-950 hover:bg-slate-900 border border-slate-800 p-3 rounded-lg transition-all disabled:opacity-50 mt-2"
+                            >
+                               <div className="flex items-center gap-3">
+                                {isExporting ? <Loader2 className="w-4 h-4 text-slate-500 shrink-0 animate-spin" /> : <FolderDown className="w-4 h-4 text-slate-500 shrink-0" />}
+                                <div className="flex flex-col text-left">
+                                  <span className="text-xs font-semibold text-slate-400">Save to Local Folder</span>
+                                  <span className="text-[10px] text-slate-600">Requires Native/Desktop access</span>
+                                </div>
+                              </div>
+                            </button>
+                          </div>
                         </div>
-                      )}
+
+                        <div className="bg-slate-900/50 rounded-xl p-4 border border-slate-800/80">
+                           <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+                             <Info className="w-3 h-3" />
+                             Format Preview
+                           </h4>
+                           <div className="flex flex-col gap-1 text-xs font-mono text-slate-500">
+                             <span className="text-indigo-400">details.json</span>
+                             <span>- Title, Sysnopsis</span>
+                             <span>- Genres, Status</span>
+                             <span className="text-indigo-400 mt-2">episodes.json</span>
+                             <span>- EP Name, Number</span>
+                             <span>- Date Upload, Scanlator</span>
+                           </div>
+                        </div>
+                      </div>
                     </div>
+
+                    {/* Right Column (Info) */}
+                    <div className="flex-1 flex flex-col">
+                      <div>
+                        <h1 className="text-4xl font-bold text-white mb-2 leading-tight">
+                          {getDisplayTitle(selectedAnime)}
+                        </h1>
+                        {(selectedAnime.title_english || selectedAnime.title_japanese) && (
+                          <h3 className="text-lg text-slate-500 font-medium mb-4 flex flex-wrap items-center gap-2">
+                            {titleLanguage === 'english' ? selectedAnime.title : selectedAnime.title_english} 
+                            {selectedAnime.title_japanese && (
+                              <>
+                                <span className="text-slate-700 mx-1">•</span> 
+                                <span className="text-slate-400 font-serif">{selectedAnime.title_japanese}</span>
+                              </>
+                            )}
+                          </h3>
+                        )}
+                        
+                        <div className="flex flex-wrap gap-2 mb-6 mt-4">
+                          <span className="bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5">
+                            <Star className="w-3.5 h-3.5" />
+                            {selectedAnime.score || 'unrated'}
+                          </span>
+                          <span className="bg-slate-800 text-slate-300 border border-slate-700 px-3 py-1 rounded-full text-xs font-medium flex items-center gap-1.5">
+                            <Tv className="w-3.5 h-3.5" />
+                            {selectedAnime.type || 'Unknown'} {selectedAnime.episodes ? `(${selectedAnime.episodes} Ep)` : ''}
+                          </span>
+                          {selectedAnime.year && (
+                            <span className="bg-slate-800 text-slate-300 border border-slate-700 px-3 py-1 rounded-full text-xs font-medium flex items-center gap-1.5">
+                              <Calendar className="w-3.5 h-3.5" />
+                              {selectedAnime.season ? `${selectedAnime.season} ` : ''}{selectedAnime.year}
+                            </span>
+                          )}
+                          <span className="bg-slate-800 text-slate-300 border border-slate-700 px-3 py-1 rounded-full text-xs font-medium">
+                            {selectedAnime.status}
+                          </span>
+                        </div>
+
+                        <div className="mb-8">
+                          <h2 className="text-lg font-semibold text-white mb-3">Synopsis</h2>
+                          <div className="prose prose-invert prose-sm max-w-none text-slate-300 leading-relaxed bg-slate-900/40 p-5 rounded-xl border border-slate-800">
+                            {selectedAnime.synopsis || 'No synopsis available.'}
+                          </div>
+                        </div>
+
+                        {/* Episodes List View */}
+                        <div className="flex-1 flex flex-col mb-8 h-96">
+                          <div className="flex items-center justify-between mb-4">
+                            <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                              <PlayCircle className="w-5 h-5 text-indigo-400" />
+                              Episodes Data
+                            </h2>
+                            <span className="text-xs text-slate-500 bg-slate-900 px-2.5 py-1 rounded-full">{episodes.length} files</span>
+                          </div>
+                        
+                          {episodes.length === 0 ? (
+                            <p className="text-slate-500 italic bg-slate-900/50 border border-slate-800 p-4 rounded-lg text-sm">No episode data available for this anime.</p>
+                          ) : (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 overflow-y-auto pr-2 custom-scrollbar pb-8">
+                              {episodes.map((ep, index) => (
+                                <div key={`${ep.mal_id}-${index}`} className="bg-slate-900/50 border border-slate-800 hover:bg-slate-800/80 hover:border-slate-700 p-3 rounded-lg flex items-center gap-3 transition-colors h-16">
+                                   <div className="text-sm font-bold text-indigo-400 bg-slate-950 border border-slate-800 shadow-inner py-1 w-12 text-center rounded shrink-0 font-mono">
+                                     <span className="text-[10px] text-slate-600 mr-0.5">EP</span>{ep.mal_id}
+                                   </div>
+                                   <div className="flex flex-col overflow-hidden justify-center h-full">
+                                     <span className="font-medium text-sm text-slate-300 truncate leading-tight" title={ep.title}>{ep.title}</span>
+                                     {ep.aired && <span className="text-[10px] text-slate-500 mt-0.5 font-mono">{new Date(ep.aired).toLocaleDateString()}</span>}
+                                   </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
                   </div>
                 </div>
               </div>
@@ -677,7 +860,13 @@ Return ONLY a JSON object with these two fields:
                   Aniyomi Local Source Folder
                 </label>
                 <div className="flex flex-col gap-2">
-                  {hasFSAPI ? (
+                  {Capacitor.isNativePlatform() ? (
+                    <div className="bg-emerald-900/20 border border-emerald-500/30 rounded-md p-3">
+                      <p className="text-xs text-emerald-200 leading-relaxed text-center font-medium">
+                        Running natively on Android. Exporting will automatically save to <strong className="text-emerald-400">/sdcard/Aniyomi/local</strong> using the Android OS file system.
+                      </p>
+                    </div>
+                  ) : hasFSAPI ? (
                     <div className="flex items-center gap-2">
                       <button
                         onClick={pickDirectory}
@@ -686,7 +875,7 @@ Return ONLY a JSON object with these two fields:
                         {dirHandle ? (
                           <>
                             <FolderCheck className="w-4 h-4 text-emerald-400" />
-                            <span>Folder Selected: {dirHandle.name}</span>
+                            <span>Folder Selected</span>
                           </>
                         ) : (
                           <>
@@ -740,20 +929,48 @@ Return ONLY a JSON object with these two fields:
         </div>
       )}
 
+      {/* Exporting Overlay */}
+      {isExporting && (
+        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-slate-950/90 backdrop-blur-md animate-in fade-in duration-300">
+          <Loader2 className="w-12 h-12 text-indigo-500 animate-spin mb-6" />
+          <h3 className="text-xl font-bold text-white mb-2">Exporting...</h3>
+          <p className="text-slate-400">Packaging details and episodes into your local library.</p>
+        </div>
+      )}
+
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 z-[100] bg-emerald-500/90 border border-emerald-400/50 text-white px-6 py-3 rounded-full shadow-[0_0_40px_rgba(16,185,129,0.3)] backdrop-blur-md animate-in slide-in-from-bottom-5 fade-in duration-300 flex items-center gap-2">
+           <FolderCheck className="w-5 h-5" />
+           <span className="font-medium text-sm">{toastMessage}</span>
+        </div>
+      )}
+
       {/* Global CSS fixes for custom scrollbar */}
       <style>{`
         .custom-scrollbar::-webkit-scrollbar {
           width: 6px;
         }
         .custom-scrollbar::-webkit-scrollbar-track {
-          background: transparent;
+          background: rgba(15, 23, 42, 1);
+          border-radius: 8px;
         }
         .custom-scrollbar::-webkit-scrollbar-thumb {
-          background: #334155;
-          border-radius: 10px;
+          background: rgba(51, 65, 85, 0.8);
+          border-radius: 8px;
         }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-          background: #475569;
+          background: rgba(71, 85, 105, 1);
+        }
+        
+        /* Disable text selection in app-like context */
+        body {
+          -webkit-user-select: none;
+          user-select: none;
+        }
+        input, textarea {
+          -webkit-user-select: auto;
+          user-select: auto;
         }
       `}</style>
     </div>
