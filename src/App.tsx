@@ -387,6 +387,13 @@ Return ONLY a JSON object with this shape: { "genres": ["string", "string"] }`;
         if (folder) {
            if (detailsJson) folder.file('details.json', detailsJson);
            if (episodesJson) folder.file('episodes.json', episodesJson);
+
+           const totalEpisodes = selectedAnime.episodes || episodes.length || 0;
+           const padLength = Math.max(2, String(totalEpisodes).length);
+           for (let i = 1; i <= totalEpisodes; i++) {
+               const epStr = String(i).padStart(padLength, '0');
+               folder.file(`ep${epStr}.mkv`, ""); // 0 KB placeholder
+           }
         }
         
         const blob = await zip.generateAsync({ type: 'blob' });
@@ -447,6 +454,19 @@ Return ONLY a JSON object with this shape: { "genres": ["string", "string"] }`;
            });
         }
         
+        const totalEpisodes = selectedAnime.episodes || episodes.length || 0;
+        const padLength = Math.max(2, String(totalEpisodes).length);
+        for (let i = 1; i <= totalEpisodes; i++) {
+            const epStr = String(i).padStart(padLength, '0');
+            await Filesystem.writeFile({
+                path: `${basePath}/ep${epStr}.mkv`,
+                data: "",
+                directory: Directory.ExternalStorage,
+                encoding: Encoding.UTF8,
+                recursive: true
+            });
+        }
+        
         showToast(`Saved natively to Android storage: /sdcard/${basePath}`);
         setIsExporting(false);
         return;
@@ -498,6 +518,16 @@ Return ONLY a JSON object with this shape: { "genres": ["string", "string"] }`;
           await episodesWritable.close();
       }
   
+      const totalEpisodes = selectedAnime.episodes || episodes.length || 0;
+      const padLength = Math.max(2, String(totalEpisodes).length);
+      for (let i = 1; i <= totalEpisodes; i++) {
+          const epStr = String(i).padStart(padLength, '0');
+          const epFileHandle = await animeFolderHandle.getFileHandle(`ep${epStr}.mkv`, { create: true });
+          const epWritable = await epFileHandle.createWritable();
+          await epWritable.write("");
+          await epWritable.close();
+      }
+
       showToast(`Successfully created folder "${folderName}" and saved details & episodes!`);
     } catch (err: any) {
         if (err.name !== 'AbortError') {
